@@ -1,0 +1,12 @@
+{
+  "name": "@liquor-store/api-go",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/go.ps1 run ./cmd/api",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/build-go-api.ps1",
+    "check": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/go.ps1 test ./...",
+    "db:migrate": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/go.ps1 run ./cmd/migrate",
+    "db:seed": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/go.ps1 run ./cmd/seed"
+  }
+}

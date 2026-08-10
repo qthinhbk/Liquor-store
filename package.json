@@ -1,0 +1,15 @@
+{
+  "name": "liquor-store-security",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @liquor-store/web --filter @liquor-store/api-go dev",
+    "dev:web": "pnpm --filter @liquor-store/web dev",
+    "dev:api": "pnpm --filter @liquor-store/api-go dev",
+    "build": "pnpm --filter @liquor-store/web build && pnpm --filter @liquor-store/api-go build",
+    "check": "pnpm --filter @liquor-store/web check && pnpm --filter @liquor-store/api-go check",
+    "db:migrate": "pnpm --filter @liquor-store/api-go db:migrate",
+    "db:seed": "pnpm --filter @liquor-store/api-go db:seed"
+  }
+}

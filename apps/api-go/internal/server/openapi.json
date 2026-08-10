@@ -1,0 +1,80 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Liquor Store Security API", "description": "Go backend contract for the store owner security dashboard.", "version": "1.0.0"},
+  "servers": [{"url": "http://localhost:3000"}],
+  "tags": [{"name":"health"},{"name":"auth"},{"name":"users"},{"name":"stores"},{"name":"cameras"},{"name":"alerts"}],
+  "paths": {
+    "/api/v1/health": {"get":{"tags":["health"],"summary":"Health check","responses":{"200":{"description":"Healthy"}}}},
+    "/api/v1/auth/register": {"post":{"tags":["auth"],"summary":"Create the first owner and store","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/RegisterRequest"}}}},"responses":{"201":{"description":"Session created"},"409":{"description":"Email or store code exists"}}}},
+    "/api/v1/auth/login": {"post":{"tags":["auth"],"summary":"Log in","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/LoginRequest"}}}},"responses":{"201":{"description":"Session created"},"401":{"description":"Invalid credentials"}}}},
+    "/api/v1/auth/refresh": {"post":{"tags":["auth"],"summary":"Rotate refresh session","responses":{"201":{"description":"Session refreshed"},"401":{"description":"Invalid refresh cookie"}}}},
+    "/api/v1/auth/logout": {"post":{"tags":["auth"],"summary":"Revoke refresh session","responses":{"201":{"description":"Logged out"}}}},
+    "/api/v1/auth/me": {"get":{"tags":["auth"],"summary":"Current user and stores","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Current user"},"401":{"description":"Unauthorized"}}}},
+    "/api/v1/users/me": {
+      "get":{"tags":["users"],"summary":"Get owner profile","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Profile"}}},
+      "patch":{"tags":["users"],"summary":"Update owner profile","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["displayName"],"properties":{"displayName":{"type":"string","example":"Store Owner"}}}}}},"responses":{"200":{"description":"Updated"}}}
+    },
+    "/api/v1/stores": {
+      "get":{"tags":["stores"],"summary":"List accessible stores","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Stores"}}},
+      "post":{"tags":["stores"],"summary":"Create store","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/StoreRequest"}}}},"responses":{"201":{"description":"Created"}}}
+    },
+    "/api/v1/stores/{storeId}": {
+      "parameters":[{"$ref":"#/components/parameters/StoreId"}],
+      "get":{"tags":["stores"],"summary":"Get store","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Store"}}},
+      "patch":{"tags":["stores"],"summary":"Update store","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"name":{"type":"string"},"address":{"type":"string"},"timezone":{"type":"string"}}}}}},"responses":{"200":{"description":"Updated"}}}
+    },
+    "/api/v1/stores/{storeId}/members": {
+      "parameters":[{"$ref":"#/components/parameters/StoreId"}],
+      "get":{"tags":["stores"],"summary":"List store members","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Members"}}},
+      "post":{"tags":["stores"],"summary":"Add existing user to store","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["email","role"],"properties":{"email":{"type":"string","format":"email"},"role":{"type":"string","enum":["MANAGER","OPERATOR"]}}}}}},"responses":{"201":{"description":"Added"}}}
+    },
+    "/api/v1/stores/{storeId}/members/{memberId}": {
+      "parameters":[{"$ref":"#/components/parameters/StoreId"},{"name":"memberId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],
+      "patch":{"tags":["stores"],"summary":"Update member role","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["role"],"properties":{"role":{"type":"string","enum":["MANAGER","OPERATOR"]}}}}}},"responses":{"200":{"description":"Updated"}}},
+      "delete":{"tags":["stores"],"summary":"Remove member","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Removed"}}}
+    },
+    "/api/v1/stores/{storeId}/cameras": {
+      "parameters":[{"$ref":"#/components/parameters/StoreId"}],
+      "get":{"tags":["cameras"],"summary":"List cameras","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Cameras"}}},
+      "post":{"tags":["cameras"],"summary":"Create camera","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CameraRequest"}}}},"responses":{"201":{"description":"Created"}}}
+    },
+    "/api/v1/stores/{storeId}/cameras/{cameraId}": {
+      "parameters":[{"$ref":"#/components/parameters/StoreId"},{"$ref":"#/components/parameters/CameraId"}],
+      "get":{"tags":["cameras"],"summary":"Get camera","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Camera"}}},
+      "patch":{"tags":["cameras"],"summary":"Update camera","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CameraRequest"}}}},"responses":{"200":{"description":"Updated"}}},
+      "delete":{"tags":["cameras"],"summary":"Delete camera","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Deleted"}}}
+    },
+    "/api/v1/stores/{storeId}/cameras/{cameraId}/zones": {
+      "parameters":[{"$ref":"#/components/parameters/StoreId"},{"$ref":"#/components/parameters/CameraId"}],
+      "get":{"tags":["cameras"],"summary":"List detection zones","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Zones"}}},
+      "post":{"tags":["cameras"],"summary":"Create detection zone","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ZoneRequest"}}}},"responses":{"201":{"description":"Created"}}}
+    },
+    "/api/v1/stores/{storeId}/cameras/{cameraId}/zones/{zoneId}": {
+      "parameters":[{"$ref":"#/components/parameters/StoreId"},{"$ref":"#/components/parameters/CameraId"},{"name":"zoneId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],
+      "get":{"tags":["cameras"],"summary":"Get zone","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Zone"}}},
+      "patch":{"tags":["cameras"],"summary":"Update zone","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ZoneRequest"}}}},"responses":{"200":{"description":"Updated"}}},
+      "delete":{"tags":["cameras"],"summary":"Delete zone","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Deleted"}}}
+    },
+    "/api/v1/stores/{storeId}/alerts": {"parameters":[{"$ref":"#/components/parameters/StoreId"}],"get":{"tags":["alerts"],"summary":"List and filter alerts","security":[{"bearerAuth":[]}],"parameters":[{"name":"status","in":"query","schema":{"type":"string"}},{"name":"severity","in":"query","schema":{"type":"string"}},{"name":"type","in":"query","schema":{"type":"string"}},{"name":"cameraId","in":"query","schema":{"type":"string"}},{"name":"cursor","in":"query","schema":{"type":"string","format":"date-time"}},{"name":"limit","in":"query","schema":{"type":"integer","default":30,"maximum":100}}],"responses":{"200":{"description":"Alert page"}}}},
+    "/api/v1/stores/{storeId}/alerts/{alertId}": {"parameters":[{"$ref":"#/components/parameters/StoreId"},{"$ref":"#/components/parameters/AlertId"}],"get":{"tags":["alerts"],"summary":"Get alert detail and evidence","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"Alert detail"}}}},
+    "/api/v1/stores/{storeId}/alerts/{alertId}/acknowledge": {"parameters":[{"$ref":"#/components/parameters/StoreId"},{"$ref":"#/components/parameters/AlertId"}],"post":{"tags":["alerts"],"summary":"Acknowledge alert","security":[{"bearerAuth":[]}],"requestBody":{"$ref":"#/components/requestBodies/AlertAction"},"responses":{"201":{"description":"Acknowledged"}}}},
+    "/api/v1/stores/{storeId}/alerts/{alertId}/dismiss": {"parameters":[{"$ref":"#/components/parameters/StoreId"},{"$ref":"#/components/parameters/AlertId"}],"post":{"tags":["alerts"],"summary":"Dismiss alert","security":[{"bearerAuth":[]}],"requestBody":{"$ref":"#/components/requestBodies/AlertAction"},"responses":{"201":{"description":"Dismissed"}}}},
+    "/api/v1/stores/{storeId}/alerts/{alertId}/resolve": {"parameters":[{"$ref":"#/components/parameters/StoreId"},{"$ref":"#/components/parameters/AlertId"}],"post":{"tags":["alerts"],"summary":"Resolve alert","security":[{"bearerAuth":[]}],"requestBody":{"$ref":"#/components/requestBodies/AlertAction"},"responses":{"201":{"description":"Resolved"}}}}
+  },
+  "components": {
+    "securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer","bearerFormat":"JWT"}},
+    "parameters":{
+      "StoreId":{"name":"storeId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+      "CameraId":{"name":"cameraId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+      "AlertId":{"name":"alertId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}
+    },
+    "requestBodies":{"AlertAction":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"note":{"type":"string","maxLength":1000,"example":"Reviewed by owner"}}}}}}},
+    "schemas":{
+      "LoginRequest":{"type":"object","required":["email","password"],"properties":{"email":{"type":"string","format":"email","example":"owner@demo.com"},"password":{"type":"string","format":"password"}}},
+      "RegisterRequest":{"type":"object","required":["email","password","displayName","storeName","storeCode"],"properties":{"email":{"type":"string","format":"email"},"password":{"type":"string","format":"password","minLength":12},"displayName":{"type":"string"},"storeName":{"type":"string"},"storeCode":{"type":"string","pattern":"^[a-z0-9-]{3,40}$"},"address":{"type":"string"}}},
+      "StoreRequest":{"type":"object","required":["name","code"],"properties":{"name":{"type":"string"},"code":{"type":"string"},"address":{"type":"string"}}},
+      "CameraRequest":{"type":"object","required":["name","location","protocol","streamGatewayRef"],"properties":{"name":{"type":"string"},"location":{"type":"string"},"protocol":{"type":"string","enum":["RTSP","ONVIF","HLS","WEBRTC"]},"streamGatewayRef":{"type":"string","description":"Safe gateway reference, never an RTSP URL or password"},"status":{"type":"string","enum":["ONLINE","OFFLINE","DISABLED"]},"isEnabled":{"type":"boolean"}}},
+      "ZoneRequest":{"type":"object","required":["name","kind","polygon"],"properties":{"name":{"type":"string"},"kind":{"type":"string","enum":["HIGH_VALUE","CASHIER","STOCKROOM","ENTRANCE","CUSTOM"]},"expectedPersonCategory":{"type":"string","enum":["EMPLOYEE","CUSTOMER","UNKNOWN"]},"polygon":{"type":"array","minItems":3,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}},"example":[[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]]},"dwellThresholdSeconds":{"type":"integer","minimum":1}}}
+    }
+  }
+}
