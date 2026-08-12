@@ -1,0 +1,17 @@
+node_modules/
+.tools/
+.pnpm-store/
+.codex/
+tmp/
+dist/
+coverage/
+*.log
+Thumbs.db
+.env
+.env.*
+!.env.example
+!**/.env.example
+apps/*/dist/
+apps/*/.vite/
+apps/api/generated/
+apps/api-go/bin/
