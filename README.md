@@ -37,8 +37,9 @@ pnpm db:seed
 ```
 
 `pnpm db:seed` is safe to run repeatedly. It prepares the
-`liquor-store-demo` store with 18 record-backed camera feeds, 6 detection zones, and 14 video-backed demo
-alerts for the Overview, Cameras, and Alerts screens. The alerts follow the
+`liquor-store-demo` store with 18 record-backed camera feeds, 6 detection zones, and 20 video-backed demo
+alerts for the Overview, Cameras, and Alerts screens. Twelve alerts remain in the owner review queue, and
+the Kitchen plus Whole store top view (Stream 2) feeds are seeded offline. The alerts follow the
 notification data shape used by the reference PDSI UI and are adapted to the
 liquor-store security domain. They rotate through four
 short H.264 clips and thumbnails derived from supplied CCTV recordings under

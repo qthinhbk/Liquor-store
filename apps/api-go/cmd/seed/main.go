@@ -49,6 +49,11 @@ var cameras = []cameraSeed{
 	{"Whole store", "Whole store", "record-whole-store-153158"},
 }
 
+var offlineCameraRefs = map[string]struct{}{
+	"record-kitchen-153607":              {},
+	"record-whole-store-top-view-155405": {},
+}
+
 var legacyCameraRefs = []string{
 	"cold-drink-dispenser-01", "kitchen-foodbox", "foodbox", "whole-store-corner-view", "whole-store", "counter-top-view",
 	"cold-drink-dispenser-07", "cold-drink-fridge", "whole-store-top-view", "cold-storage", "kitchen", "entrance-top-view",
@@ -86,28 +91,39 @@ func cctvVideoFixtures() []alertSeed {
 	}
 	severities := []string{"LOW", "MEDIUM", "HIGH", "MEDIUM", "CRITICAL"}
 	statuses := []string{"RESOLVED", "DISMISSED", "RESOLVED", "ACKNOWLEDGED"}
-	fixtures := make([]alertSeed, 0, 14)
-	for index := 0; index < 14; index++ {
-		context := media[index%len(media)]
+	const activeAlertCount = 12
+	const totalAlertCount = 20
+	fixtures := make([]alertSeed, 0, totalAlertCount)
+	for index := 0; index < totalAlertCount; index++ {
+		// Keep exactly one emergency fixture. Every remaining video represents
+		// suspicious behavior so the owner sees one unambiguous emergency item.
+		context := media[0]
+		if index > 0 {
+			context = media[1+(index-1)%(len(media)-1)]
+		}
 		status := statuses[index%len(statuses)]
 		note := "Demo notification reviewed for the deployment preview."
-		// Keep several PDSI-derived fixtures in the review queue so the video
-		// interaction is immediately visible on the Alerts page.
-		if index < 5 {
+		// Keep a substantial video-backed review queue for dashboard and alert
+		// triage demonstrations.
+		if index < activeAlertCount {
 			status = "NEW"
 			note = ""
 		} else if status == "ACKNOWLEDGED" {
 			note = "Demo notification is awaiting a final owner decision."
 		}
 		minutesAgo := 480 + index*720
-		if index < 5 {
-			minutesAgo = []int{2, 8, 16, 26, 40}[index]
+		if index < activeAlertCount {
+			minutesAgo = 2 + index*7
+		}
+		severity := severities[index%len(severities)]
+		if context.AlertType == "WEAPON_DETECTED" {
+			severity = "CRITICAL"
 		}
 		fixtures = append(fixtures, alertSeed{
 			EventID:        fmt.Sprintf("pdsi-ui-fixture-%03d", index+1),
 			CameraRef:      context.CameraRef,
 			Type:           context.AlertType,
-			Severity:       severities[index%len(severities)],
+			Severity:       severity,
 			Status:         status,
 			Category:       context.Category,
 			Confidence:     .66 + float64(index%7)*.04,
@@ -177,8 +193,12 @@ func main() {
 
 	cameraIDs := make(map[string]string, len(cameras))
 	for _, camera := range cameras {
+		status := "ONLINE"
+		if _, isOffline := offlineCameraRefs[camera.Ref]; isOffline {
+			status = "OFFLINE"
+		}
 		var id string
-		err = tx.QueryRow(ctx, `INSERT INTO "cameras" ("id","storeId","name","location","protocol","streamGatewayRef","status","isEnabled","updatedAt") VALUES ($1,$2,$3,$4,'RTSP',$5,'ONLINE',true,NOW()) ON CONFLICT ("streamGatewayRef") DO UPDATE SET "name"=EXCLUDED."name","location"=EXCLUDED."location","storeId"=EXCLUDED."storeId","status"='ONLINE',"isEnabled"=true,"updatedAt"=NOW() RETURNING "id"`, uuid.NewString(), storeID, camera.Name, camera.Location, camera.Ref).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO "cameras" ("id","storeId","name","location","protocol","streamGatewayRef","status","isEnabled","updatedAt") VALUES ($1,$2,$3,$4,'RTSP',$5,$6,true,NOW()) ON CONFLICT ("streamGatewayRef") DO UPDATE SET "name"=EXCLUDED."name","location"=EXCLUDED."location","storeId"=EXCLUDED."storeId","status"=EXCLUDED."status","isEnabled"=true,"updatedAt"=NOW() RETURNING "id"`, uuid.NewString(), storeID, camera.Name, camera.Location, camera.Ref, status).Scan(&id)
 		if err != nil {
 			fatal(err)
 		}

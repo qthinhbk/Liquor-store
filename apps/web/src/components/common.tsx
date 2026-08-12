@@ -2,7 +2,7 @@ import CameraAltOutlinedIcon from '@mui/icons-material/CameraAltOutlined';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import VideocamOffOutlinedIcon from '@mui/icons-material/VideocamOffOutlined';
 import { Alert, Box, Chip, CircularProgress, Paper, Stack, Typography } from '@mui/material';
-import type { AlertSeverity, AlertStatus, CameraStatus } from '../lib/types';
+import type { AlertStatus, CameraStatus } from '../lib/types';
 
 export function ScreenLoader({ label = 'Loading dashboard…' }: { label?: string }) {
   return (
@@ -49,16 +49,6 @@ export function AlertStatusChip({ status }: { status: AlertStatus }) {
     RESOLVED: 'success',
   };
   return <Chip size="small" color={colors[status]} label={toTitle(status)} />;
-}
-
-export function SeverityChip({ severity }: { severity: AlertSeverity }) {
-  const colors: Record<AlertSeverity, 'default' | 'warning' | 'error' | 'error'> = {
-    LOW: 'default',
-    MEDIUM: 'warning',
-    HIGH: 'error',
-    CRITICAL: 'error',
-  };
-  return <Chip size="small" color={colors[severity]} label={toTitle(severity)} variant={severity === 'CRITICAL' ? 'filled' : 'outlined'} />;
 }
 
 export function formatDateTime(value: string | null | undefined) {

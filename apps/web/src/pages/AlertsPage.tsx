@@ -2,16 +2,18 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import CloseIcon from '@mui/icons-material/Close';
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
 import ReplayIcon from '@mui/icons-material/Replay';
-import { Alert as MuiAlert, Box, Button, Chip, CircularProgress, Dialog, DialogContent, DialogTitle, IconButton, LinearProgress, Paper, Stack, Typography } from '@mui/material';
+import { Alert as MuiAlert, Box, Button, Chip, CircularProgress, Dialog, DialogContent, DialogTitle, IconButton, LinearProgress, Pagination, Paper, Stack, Typography } from '@mui/material';
 import { useGSAP } from '@gsap/react';
 import gsap from 'gsap';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthProvider';
-import { EmptyState, InlineError, ScreenLoader, SeverityChip, alertTitle, formatDateTime, toTitle } from '../components/common';
+import { EmptyState, InlineError, ScreenLoader, alertTitle, formatDateTime, toTitle } from '../components/common';
 import { api, getErrorMessage } from '../lib/api';
 import type { Alert, AlertDetail } from '../lib/types';
 
 type ReviewDecision = 'match' | 'false-alarm';
+
+const alertsPerPage = 5;
 
 const contextImages = [
   '/cctv/counter.png',
@@ -209,11 +211,34 @@ function sortActiveAlerts(items: Alert[]) {
   });
 }
 
+function AlertPagination({ page, count, onChange }: { page: number; count: number; onChange: (page: number) => void }) {
+  if (count <= 1) return null;
+  return (
+    <Box sx={{ mt: 2.25, display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 1.5 }}>
+      <Typography variant="caption" color="text.secondary">Page {page} of {count}</Typography>
+      <Pagination
+        page={page}
+        count={count}
+        onChange={(_, value) => onChange(value)}
+        shape="rounded"
+        color="primary"
+        siblingCount={1}
+        boundaryCount={1}
+        size="small"
+      />
+    </Box>
+  );
+}
+
 export function AlertsPage() {
   const pageRef = useRef<HTMLDivElement>(null);
+  const attentionSectionRef = useRef<HTMLDivElement>(null);
+  const confirmedSectionRef = useRef<HTMLDivElement>(null);
   const { store } = useAuth();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [confirmedAlerts, setConfirmedAlerts] = useState<Alert[]>([]);
+  const [attentionPage, setAttentionPage] = useState(1);
+  const [confirmedPage, setConfirmedPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
@@ -239,6 +264,21 @@ export function AlertsPage() {
   }, [store]);
 
   useEffect(() => { void loadAlerts(); }, [loadAlerts]);
+
+  const attentionPageCount = Math.max(1, Math.ceil(alerts.length / alertsPerPage));
+  const confirmedPageCount = Math.max(1, Math.ceil(confirmedAlerts.length / alertsPerPage));
+  const safeAttentionPage = Math.min(attentionPage, attentionPageCount);
+  const safeConfirmedPage = Math.min(confirmedPage, confirmedPageCount);
+  const visibleAlerts = alerts.slice((safeAttentionPage - 1) * alertsPerPage, safeAttentionPage * alertsPerPage);
+  const visibleConfirmedAlerts = confirmedAlerts.slice((safeConfirmedPage - 1) * alertsPerPage, safeConfirmedPage * alertsPerPage);
+
+  useEffect(() => {
+    setAttentionPage((current) => Math.min(current, attentionPageCount));
+  }, [attentionPageCount]);
+
+  useEffect(() => {
+    setConfirmedPage((current) => Math.min(current, confirmedPageCount));
+  }, [confirmedPageCount]);
 
   useGSAP(() => {
     gsap.from('.alert-review-card', { y: 12, opacity: 0, duration: 0.38, stagger: 0.045, ease: 'power2.out' });
@@ -306,14 +346,14 @@ export function AlertsPage() {
         </Box>
       </Paper>
 
-      <Box>
+      <Box ref={attentionSectionRef} sx={{ scrollMarginTop: 96 }}>
         <Typography variant="h5">Needs attention</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>Only alerts with recorded video are shown.</Typography>
       {alerts.length === 0 ? (
         <EmptyState title="You are all caught up" description="There are no new video alerts to review." />
       ) : (
         <Stack spacing={1.5}>
-          {alerts.map((alert) => {
+          {visibleAlerts.map((alert) => {
             const isSaving = reviewingId === alert.id;
             const thumbnail = metadataUrl(alert, 'thumbnailUrl') ?? imageForAlert(alert);
             return (
@@ -361,7 +401,6 @@ export function AlertsPage() {
                         label={isEmergency(alert) ? 'Emergency alert' : 'Suspicious behavior'}
                         sx={{ color: isEmergency(alert) ? '#FF817A' : '#F0C987', borderColor: isEmergency(alert) ? '#FF6B63' : '#D8A35D' }}
                       />
-                      <SeverityChip severity={alert.severity} />
                       <Typography variant="body2" color="text.secondary">{formatDateTime(alert.detectedAt)}</Typography>
                     </Stack>
                     <Typography variant="h5" sx={{ mt: 1.5 }}>{situationTitle(alert.type)}</Typography>
@@ -396,11 +435,19 @@ export function AlertsPage() {
               </Paper>
             );
           })}
+          <AlertPagination
+            page={safeAttentionPage}
+            count={attentionPageCount}
+            onChange={(page) => {
+              setAttentionPage(page);
+              attentionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+          />
         </Stack>
       )}
       </Box>
 
-      <Box sx={{ pt: 1 }}>
+      <Box ref={confirmedSectionRef} sx={{ pt: 1, scrollMarginTop: 96 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="end" gap={2} sx={{ mb: 2 }}>
           <Box>
             <Typography variant="h5">Confirmed alerts</Typography>
@@ -412,9 +459,17 @@ export function AlertsPage() {
           <EmptyState title="No confirmed alerts yet" description="An alert confirmed as a real incident will appear here." />
         ) : (
           <Stack spacing={1.5}>
-            {confirmedAlerts.map((alert) => (
+            {visibleConfirmedAlerts.map((alert) => (
               <ConfirmedAlertCard key={alert.id} alert={alert} onOpen={openContext} />
             ))}
+            <AlertPagination
+              page={safeConfirmedPage}
+              count={confirmedPageCount}
+              onChange={(page) => {
+                setConfirmedPage(page);
+                confirmedSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            />
           </Stack>
         )}
       </Box>
