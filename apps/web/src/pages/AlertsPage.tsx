@@ -328,7 +328,7 @@ export function AlertsPage() {
     <Stack ref={pageRef} spacing={3.5}>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'end', gap: 2 }}>
         <Box>
-          <Typography component="h1" variant="h4">Alerts</Typography>
+          <Typography component="h1" variant="h4">Alert</Typography>
           <Typography color="text.secondary" sx={{ mt: 0.75, maxWidth: 700 }}>
             Emergency alerts require immediate review. Suspicious behavior alerts can be confirmed or dismissed as false alarms.
           </Typography>

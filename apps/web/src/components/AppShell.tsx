@@ -14,8 +14,8 @@ const drawerWidth = 232;
 
 const navigation = [
   { label: 'Overview', to: '/dashboard', icon: <GridViewOutlinedIcon fontSize="small" /> },
-  { label: 'Alerts', to: '/alerts', icon: <NotificationsActiveOutlinedIcon fontSize="small" /> },
-  { label: 'Cameras', to: '/cameras', icon: <CameraAltOutlinedIcon fontSize="small" /> },
+  { label: 'Alert', to: '/alerts', icon: <NotificationsActiveOutlinedIcon fontSize="small" /> },
+  { label: 'Camera', to: '/cameras', icon: <CameraAltOutlinedIcon fontSize="small" /> },
 ];
 
 export function AppShell() {

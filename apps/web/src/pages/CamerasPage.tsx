@@ -21,18 +21,16 @@ interface LiveFeed {
 }
 
 type StatusFilter = 'ALL' | 'LIVE' | 'OFFLINE';
-type CameraSort = 'DEFAULT' | 'NAME' | 'AREA' | 'OFFLINE_FIRST';
 
 interface CameraPreferences {
   search: string;
   status: StatusFilter;
   area: string;
-  sort: CameraSort;
 }
 
 const preferencesKey = 'liquor-store.camera-filters';
 const scrollKey = 'liquor-store.camera-scroll';
-const defaultPreferences: CameraPreferences = { search: '', status: 'ALL', area: 'ALL', sort: 'DEFAULT' };
+const defaultPreferences: CameraPreferences = { search: '', status: 'ALL', area: 'ALL' };
 
 function restorePreferences(): CameraPreferences {
   try {
@@ -43,7 +41,6 @@ function restorePreferences(): CameraPreferences {
       search: typeof value.search === 'string' ? value.search : '',
       status: value.status === 'LIVE' || value.status === 'OFFLINE' ? value.status : 'ALL',
       area: typeof value.area === 'string' ? value.area : 'ALL',
-      sort: value.sort === 'NAME' || value.sort === 'AREA' || value.sort === 'OFFLINE_FIRST' ? value.sort : 'DEFAULT',
     };
   } catch {
     return defaultPreferences;
@@ -102,27 +99,26 @@ export function CamerasPage() {
     })), [cameras]);
 
   const onlineCount = feeds.filter(({ camera }) => isCameraOnline(camera)).length;
-  const offlineCount = feeds.length - onlineCount;
   const areas = useMemo<string[]>(() => Array.from(new Set<string>(feeds.map(({ camera }) => cameraArea(camera)))).sort((left, right) => left.localeCompare(right)), [feeds]);
   const selectedArea = preferences.area === 'ALL' || areas.includes(preferences.area) ? preferences.area : 'ALL';
 
-  const filteredFeeds = useMemo(() => {
+  const scopedFeeds = useMemo(() => {
     const search = preferences.search.trim().toLocaleLowerCase();
-    const result = feeds.filter(({ camera }) => {
-      const online = isCameraOnline(camera);
-      if (preferences.status === 'LIVE' && !online) return false;
-      if (preferences.status === 'OFFLINE' && online) return false;
+    return feeds.filter(({ camera }) => {
       if (selectedArea !== 'ALL' && cameraArea(camera) !== selectedArea) return false;
       if (search && !`${camera.name} ${camera.location} ${cameraArea(camera)}`.toLocaleLowerCase().includes(search)) return false;
       return true;
     });
-    return [...result].sort((left, right) => {
-      if (preferences.sort === 'NAME') return left.camera.name.localeCompare(right.camera.name);
-      if (preferences.sort === 'AREA') return cameraArea(left.camera).localeCompare(cameraArea(right.camera)) || left.camera.name.localeCompare(right.camera.name);
-      if (preferences.sort === 'OFFLINE_FIRST') return Number(isCameraOnline(left.camera)) - Number(isCameraOnline(right.camera)) || left.camera.name.localeCompare(right.camera.name);
-      return left.channelNumber - right.channelNumber;
-    });
-  }, [feeds, preferences.search, preferences.sort, preferences.status, selectedArea]);
+  }, [feeds, preferences.search, selectedArea]);
+
+  const scopedOnlineCount = scopedFeeds.filter(({ camera }) => isCameraOnline(camera)).length;
+  const scopedOfflineCount = scopedFeeds.length - scopedOnlineCount;
+  const filteredFeeds = useMemo(() => scopedFeeds.filter(({ camera }) => {
+    const online = isCameraOnline(camera);
+    if (preferences.status === 'LIVE') return online;
+    if (preferences.status === 'OFFLINE') return !online;
+    return true;
+  }), [preferences.status, scopedFeeds]);
 
   const selectedFeed = useMemo(() => feeds.find(({ camera }) => camera.id === selectedFeedId) ?? null, [feeds, selectedFeedId]);
   const selectedFeedOnline = Boolean(selectedFeed?.camera.isEnabled && selectedFeed.camera.status === 'ONLINE');
@@ -146,7 +142,7 @@ export function CamerasPage() {
 
   useGSAP(() => {
     gsap.from('.live-feed', { y: 14, scale: 0.985, opacity: 0, duration: 0.45, stagger: 0.035, ease: 'power2.out' });
-  }, { scope: pageRef, dependencies: [isLoading, preferences.search, preferences.status, selectedArea, preferences.sort], revertOnUpdate: true });
+  }, { scope: pageRef, dependencies: [isLoading, preferences.search, preferences.status, selectedArea], revertOnUpdate: true });
 
   if (!store || isLoading) return <ScreenLoader label="Loading cameras…" />;
 
@@ -154,7 +150,7 @@ export function CamerasPage() {
     <Stack ref={pageRef} spacing={3} sx={{ overflowX: 'hidden' }}>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'end', gap: 2 }}>
         <Box sx={{ maxWidth: 760 }}>
-          <Typography component="h1" variant="h4">Live cameras</Typography>
+          <Typography component="h1" variant="h4">Live camera</Typography>
           <Typography color="text.secondary" sx={{ mt: 0.75 }}>
             Select a camera to open its continuously looping deployment-preview feed.
           </Typography>
@@ -179,14 +175,13 @@ export function CamerasPage() {
           borderColor: '#2A302E',
         }}
       >
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: 'minmax(260px, 1.5fr) minmax(160px, .7fr) minmax(170px, .75fr) auto' }, gap: 1.25 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(260px, 1.5fr) minmax(160px, .7fr) auto' }, gap: 1.25 }}>
           <TextField
             size="small"
             value={preferences.search}
             onChange={(event) => setPreferences((current) => ({ ...current, search: event.target.value }))}
             placeholder="Search cameras"
             aria-label="Search cameras"
-            sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }}
             InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
           />
           <FormControl size="small">
@@ -201,26 +196,12 @@ export function CamerasPage() {
               {areas.map((area) => <MenuItem key={area} value={area}>{area}</MenuItem>)}
             </Select>
           </FormControl>
-          <FormControl size="small">
-            <InputLabel id="camera-sort-label">Sort</InputLabel>
-            <Select
-              labelId="camera-sort-label"
-              label="Sort"
-              value={preferences.sort}
-              onChange={(event) => setPreferences((current) => ({ ...current, sort: event.target.value as CameraSort }))}
-            >
-              <MenuItem value="DEFAULT">Camera order</MenuItem>
-              <MenuItem value="NAME">Name A–Z</MenuItem>
-              <MenuItem value="AREA">Area</MenuItem>
-              <MenuItem value="OFFLINE_FIRST">Offline first</MenuItem>
-            </Select>
-          </FormControl>
           <Button
             variant="outlined"
             startIcon={<RefreshIcon />}
             disabled={isFetching}
             onClick={() => void refetch()}
-            sx={{ gridColumn: { xs: '1 / -1', md: 'auto' }, whiteSpace: 'nowrap' }}
+            sx={{ whiteSpace: 'nowrap' }}
           >
             {isFetching ? 'Updating' : 'Refresh'}
           </Button>
@@ -234,11 +215,11 @@ export function CamerasPage() {
             onChange={(_, value: StatusFilter | null) => value && setPreferences((current) => ({ ...current, status: value }))}
             aria-label="Camera status"
           >
-            <ToggleButton value="ALL">All {feeds.length}</ToggleButton>
-            <ToggleButton value="LIVE">Live {onlineCount}</ToggleButton>
-            <ToggleButton value="OFFLINE">Offline {offlineCount}</ToggleButton>
+            <ToggleButton value="ALL">All {scopedFeeds.length}</ToggleButton>
+            <ToggleButton value="LIVE">Live {scopedOnlineCount}</ToggleButton>
+            <ToggleButton value="OFFLINE">Offline {scopedOfflineCount}</ToggleButton>
           </ToggleButtonGroup>
-          <Typography variant="caption" color="text.secondary">Showing {filteredFeeds.length} of {feeds.length} cameras</Typography>
+          <Typography variant="caption" color="text.secondary">Showing {filteredFeeds.length} of {scopedFeeds.length} cameras</Typography>
         </Box>
       </Paper>
 
@@ -253,10 +234,14 @@ export function CamerasPage() {
           {filteredFeeds.map((feed) => {
             const online = isCameraOnline(feed.camera);
             return (
-              <Card key={feed.camera.id} className="live-feed" sx={{ overflow: 'hidden', '&:hover': { borderColor: '#6B5435', transform: 'translateY(-2px)' }, '&:hover .camera-thumbnail': { transform: 'scale(1.045)' }, transition: 'transform 240ms ease, border-color 240ms ease' }}>
-                <CardActionArea onClick={() => setSelectedFeedId(feed.camera.id)} aria-label={`Open live view for ${feed.camera.name}`}>
+              <Card key={feed.camera.id} className="live-feed" sx={{ overflow: 'hidden', '&:hover': { borderColor: '#6B5435' }, transition: 'border-color 160ms ease' }}>
+                <CardActionArea
+                  onClick={() => setSelectedFeedId(feed.camera.id)}
+                  aria-label={`Open live view for ${feed.camera.name}`}
+                  sx={{ touchAction: 'pan-y', '&:hover': { bgcolor: 'rgba(216,163,93,.025)' } }}
+                >
                   <Box sx={{ position: 'relative', aspectRatio: '16 / 9', bgcolor: '#050606', overflow: 'hidden' }}>
-                    <Box className="camera-thumbnail" component="img" src={feed.imageUrl} alt={`${feed.camera.name} camera preview`} sx={{ width: '100%', height: '100%', objectFit: 'cover', filter: online ? 'brightness(.86) contrast(1.1)' : 'grayscale(1) brightness(.42)', transition: 'transform 700ms ease' }} />
+                    <Box component="img" src={feed.imageUrl} alt={`${feed.camera.name} camera preview`} loading="lazy" decoding="async" sx={{ width: '100%', height: '100%', objectFit: 'cover', filter: online ? 'brightness(.86) contrast(1.1)' : 'grayscale(1) brightness(.42)' }} />
                     <Box sx={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 0.6, bgcolor: 'rgba(9,11,12,.82)', color: online ? '#9BD2AC' : '#C6C9C7', px: 1, py: 0.45, borderRadius: 0.5, fontSize: 10, fontWeight: 750, letterSpacing: '.08em' }}>
                       <FiberManualRecordIcon sx={{ fontSize: 9 }} />
                       {online ? 'LIVE' : 'OFFLINE'}
