@@ -1,11 +1,14 @@
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import CloseIcon from '@mui/icons-material/Close';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
 import ReplayIcon from '@mui/icons-material/Replay';
+import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import { Alert as MuiAlert, Box, Button, Chip, CircularProgress, Dialog, DialogContent, DialogTitle, IconButton, LinearProgress, Pagination, Paper, Stack, Typography } from '@mui/material';
 import { useGSAP } from '@gsap/react';
 import gsap from 'gsap';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import { EmptyState, InlineError, ScreenLoader, alertTitle, formatDateTime, toTitle } from '../components/common';
 import { api, getErrorMessage } from '../lib/api';
@@ -33,6 +36,28 @@ const alertDescriptions: Record<string, string> = {
   WEAPON_DETECTED: 'The system detected an object that may be a weapon.',
   SUSPICIOUS_PRODUCT_CONCEALMENT: 'A person may have concealed a product from view.',
 };
+
+const alertTypeOrder = [
+  'WEAPON_DETECTED',
+  'CASH_DRAWER_WITHOUT_CUSTOMER',
+  'SUSPICIOUS_CASH_HANDLING',
+  'POS_VOID_OR_REFUND',
+  'UNAUTHORIZED_STOCKROOM_ACCESS',
+  'HIGH_VALUE_ZONE_DWELL',
+  'SUSPICIOUS_PRODUCT_CONCEALMENT',
+];
+
+interface AlertFolder {
+  type: string | null;
+  title: string;
+  needsReview: number;
+  confirmed: number;
+  emergency: boolean;
+}
+
+function isDetectedToday(alert: Alert) {
+  return new Date(alert.detectedAt).toDateString() === new Date().toDateString();
+}
 
 function imageForAlert(alert: Alert) {
   const value = alert.cameraId ?? alert.id;
@@ -235,6 +260,7 @@ export function AlertsPage() {
   const attentionSectionRef = useRef<HTMLDivElement>(null);
   const confirmedSectionRef = useRef<HTMLDivElement>(null);
   const { store } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [confirmedAlerts, setConfirmedAlerts] = useState<Alert[]>([]);
   const [attentionPage, setAttentionPage] = useState(1);
@@ -244,6 +270,10 @@ export function AlertsPage() {
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AlertDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const requestedType = searchParams.get('type');
+  const selectedType = requestedType && alertTypeOrder.includes(requestedType) ? requestedType : null;
+  const todayOnly = searchParams.get('period') === 'today';
+  const requestedSection = searchParams.get('section');
 
   const loadAlerts = useCallback(async () => {
     if (!store) return;
@@ -265,12 +295,49 @@ export function AlertsPage() {
 
   useEffect(() => { void loadAlerts(); }, [loadAlerts]);
 
-  const attentionPageCount = Math.max(1, Math.ceil(alerts.length / alertsPerPage));
-  const confirmedPageCount = Math.max(1, Math.ceil(confirmedAlerts.length / alertsPerPage));
+  const periodAlerts = useMemo(
+    () => todayOnly ? alerts.filter(isDetectedToday) : alerts,
+    [alerts, todayOnly],
+  );
+  const periodConfirmedAlerts = useMemo(
+    () => todayOnly ? confirmedAlerts.filter(isDetectedToday) : confirmedAlerts,
+    [confirmedAlerts, todayOnly],
+  );
+  const folders = useMemo<AlertFolder[]>(() => {
+    const foldersByType = alertTypeOrder
+      .map((type) => ({
+        type,
+        title: situationTitle(type),
+        needsReview: periodAlerts.filter((alert) => alert.type === type).length,
+        confirmed: periodConfirmedAlerts.filter((alert) => alert.type === type).length,
+        emergency: type === 'WEAPON_DETECTED',
+      }))
+      .filter((folder) => folder.needsReview > 0 || folder.confirmed > 0 || folder.type === selectedType);
+
+    return [{
+      type: null,
+      title: 'All alerts',
+      needsReview: periodAlerts.length,
+      confirmed: periodConfirmedAlerts.length,
+      emergency: false,
+    }, ...foldersByType];
+  }, [periodAlerts, periodConfirmedAlerts, selectedType]);
+  const filteredAlerts = useMemo(
+    () => selectedType ? periodAlerts.filter((alert) => alert.type === selectedType) : periodAlerts,
+    [periodAlerts, selectedType],
+  );
+  const filteredConfirmedAlerts = useMemo(
+    () => selectedType ? periodConfirmedAlerts.filter((alert) => alert.type === selectedType) : periodConfirmedAlerts,
+    [periodConfirmedAlerts, selectedType],
+  );
+  const selectedFolderTitle = selectedType ? situationTitle(selectedType) : 'All alerts';
+
+  const attentionPageCount = Math.max(1, Math.ceil(filteredAlerts.length / alertsPerPage));
+  const confirmedPageCount = Math.max(1, Math.ceil(filteredConfirmedAlerts.length / alertsPerPage));
   const safeAttentionPage = Math.min(attentionPage, attentionPageCount);
   const safeConfirmedPage = Math.min(confirmedPage, confirmedPageCount);
-  const visibleAlerts = alerts.slice((safeAttentionPage - 1) * alertsPerPage, safeAttentionPage * alertsPerPage);
-  const visibleConfirmedAlerts = confirmedAlerts.slice((safeConfirmedPage - 1) * alertsPerPage, safeConfirmedPage * alertsPerPage);
+  const visibleAlerts = filteredAlerts.slice((safeAttentionPage - 1) * alertsPerPage, safeAttentionPage * alertsPerPage);
+  const visibleConfirmedAlerts = filteredConfirmedAlerts.slice((safeConfirmedPage - 1) * alertsPerPage, safeConfirmedPage * alertsPerPage);
 
   useEffect(() => {
     setAttentionPage((current) => Math.min(current, attentionPageCount));
@@ -280,7 +347,20 @@ export function AlertsPage() {
     setConfirmedPage((current) => Math.min(current, confirmedPageCount));
   }, [confirmedPageCount]);
 
+  useEffect(() => {
+    setAttentionPage(1);
+    setConfirmedPage(1);
+  }, [selectedType, todayOnly]);
+
+  useEffect(() => {
+    if (loading || (requestedSection !== 'attention' && requestedSection !== 'confirmed')) return;
+    const target = requestedSection === 'confirmed' ? confirmedSectionRef.current : attentionSectionRef.current;
+    const animationFrame = requestAnimationFrame(() => target?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    return () => cancelAnimationFrame(animationFrame);
+  }, [loading, requestedSection]);
+
   useGSAP(() => {
+    gsap.from('.alert-folder', { x: 18, opacity: 0, duration: 0.42, stagger: 0.045, ease: 'power2.out' });
     gsap.from('.alert-review-card', { y: 12, opacity: 0, duration: 0.38, stagger: 0.045, ease: 'power2.out' });
   }, { scope: pageRef, dependencies: [loading] });
 
@@ -302,6 +382,7 @@ export function AlertsPage() {
       }
       setAlerts((current) => current.filter((item) => item.id !== alert.id));
       if (detail?.id === alert.id) setDetail(null);
+      window.dispatchEvent(new Event('alerts:changed'));
     } catch (cause) {
       setError(getErrorMessage(cause));
     } finally {
@@ -322,6 +403,21 @@ export function AlertsPage() {
     }
   };
 
+  const selectFolder = (type: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (type) next.set('type', type);
+    else next.delete('type');
+    next.delete('section');
+    setSearchParams(next);
+  };
+
+  const clearPeriodFilter = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('period');
+    next.delete('section');
+    setSearchParams(next);
+  };
+
   if (loading) return <ScreenLoader label="Loading alerts…" />;
 
   return (
@@ -338,19 +434,60 @@ export function AlertsPage() {
 
       {error && <InlineError message={error} />}
 
-      <Paper variant="outlined" sx={{ px: 2.5, py: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderColor: alerts.length ? '#5A472E' : '#2C3931', bgcolor: alerts.length ? 'rgba(216,163,93,.06)' : 'rgba(120,185,144,.05)' }}>
-        <Typography sx={{ fontSize: 30, lineHeight: 1, fontWeight: 650, color: alerts.length ? '#F0C987' : '#9BD2AC' }}>{alerts.length}</Typography>
+      <Paper variant="outlined" sx={{ px: 2.5, py: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderColor: filteredAlerts.length ? '#5A472E' : '#2C3931', bgcolor: filteredAlerts.length ? 'rgba(216,163,93,.06)' : 'rgba(120,185,144,.05)' }}>
+        <Typography sx={{ fontSize: 30, lineHeight: 1, fontWeight: 650, color: filteredAlerts.length ? '#F0C987' : '#9BD2AC' }}>{filteredAlerts.length}</Typography>
         <Box>
-          <Typography fontWeight={650}>{alerts.length === 1 ? 'active alert' : 'active alerts'}</Typography>
-          <Typography variant="body2" color="text.secondary">Emergency alerts appear first. Confirmed incidents move to the archive below.</Typography>
+          <Typography fontWeight={650}>{filteredAlerts.length === 1 ? 'active alert' : 'active alerts'} · {selectedFolderTitle}</Typography>
+          <Typography variant="body2" color="text.secondary">Emergency alerts appear first. Select a folder to focus on one situation type.</Typography>
         </Box>
       </Paper>
 
+      <Box>
+        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'end' }} gap={1.5} sx={{ mb: 1.5 }}>
+          <Box>
+            <Typography variant="h5">Alert folders</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>Warnings are grouped by situation so related clips stay together.</Typography>
+          </Box>
+          {todayOnly && (
+            <Chip
+              color="primary"
+              variant="outlined"
+              label="Detected today"
+              onDelete={clearPeriodFilter}
+            />
+          )}
+        </Stack>
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 1,
+            mx: { xs: -2, sm: 0 },
+            px: { xs: 2, sm: 0 },
+            pb: 1,
+            overflowX: 'auto',
+            scrollSnapType: 'x proximity',
+            scrollbarWidth: 'thin',
+            scrollbarColor: '#343A38 transparent',
+          }}
+        >
+          {folders.map((folder) => (
+            <AlertFolderButton
+              key={folder.type ?? 'ALL'}
+              folder={folder}
+              selected={folder.type === selectedType}
+              onClick={() => selectFolder(folder.type)}
+            />
+          ))}
+        </Box>
+      </Box>
+
       <Box ref={attentionSectionRef} sx={{ scrollMarginTop: 96 }}>
         <Typography variant="h5">Needs attention</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>Only alerts with recorded video are shown.</Typography>
-      {alerts.length === 0 ? (
-        <EmptyState title="You are all caught up" description="There are no new video alerts to review." />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
+          {selectedType ? `${selectedFolderTitle} · ` : ''}{todayOnly ? 'Detected today · ' : ''}Only alerts with recorded video are shown.
+        </Typography>
+      {filteredAlerts.length === 0 ? (
+        <EmptyState title="You are all caught up" description={`There are no new video alerts in ${selectedFolderTitle.toLocaleLowerCase()} to review.`} />
       ) : (
         <Stack spacing={1.5}>
           {visibleAlerts.map((alert) => {
@@ -453,10 +590,10 @@ export function AlertsPage() {
             <Typography variant="h5">Confirmed alerts</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>Real incidents confirmed by the owner, retained for later review.</Typography>
           </Box>
-          <Chip size="small" color="success" variant="outlined" label={`${confirmedAlerts.length} confirmed`} />
+          <Chip size="small" color="success" variant="outlined" label={`${filteredConfirmedAlerts.length} confirmed`} />
         </Stack>
-        {confirmedAlerts.length === 0 ? (
-          <EmptyState title="No confirmed alerts yet" description="An alert confirmed as a real incident will appear here." />
+        {filteredConfirmedAlerts.length === 0 ? (
+          <EmptyState title="No confirmed alerts yet" description={`Confirmed incidents in ${selectedFolderTitle.toLocaleLowerCase()} will appear here.`} />
         ) : (
           <Stack spacing={1.5}>
             {visibleConfirmedAlerts.map((alert) => (
@@ -491,6 +628,56 @@ export function AlertsPage() {
         </DialogContent>
       </Dialog>
     </Stack>
+  );
+}
+
+function AlertFolderButton({ folder, selected, onClick }: { folder: AlertFolder; selected: boolean; onClick: () => void }) {
+  const accent = folder.emergency ? '#FF817A' : selected ? '#F0C987' : '#8E9793';
+  const borderColor = folder.emergency && folder.needsReview > 0 ? '#733E3A' : selected ? '#6A5334' : '#252A29';
+
+  return (
+    <Paper
+      component="button"
+      type="button"
+      className="alert-folder"
+      variant="outlined"
+      aria-pressed={selected}
+      aria-label={`${folder.title}: ${folder.needsReview} need review, ${folder.confirmed} confirmed`}
+      onClick={onClick}
+      sx={{
+        flex: { xs: '0 0 235px', lg: selected ? '1.45 0 285px' : '1 0 205px' },
+        minWidth: { xs: 235, lg: selected ? 285 : 205 },
+        maxWidth: { xs: 280, lg: selected ? 380 : 280 },
+        minHeight: 92,
+        p: 1.75,
+        color: 'inherit',
+        textAlign: 'left',
+        cursor: 'pointer',
+        scrollSnapAlign: 'start',
+        borderColor,
+        bgcolor: selected ? 'rgba(216,163,93,.075)' : folder.emergency && folder.needsReview > 0 ? 'rgba(224,107,101,.045)' : '#111516',
+        transition: 'flex-basis 360ms cubic-bezier(.2,.8,.2,1), min-width 360ms cubic-bezier(.2,.8,.2,1), border-color 180ms ease, background-color 180ms ease, transform 180ms ease',
+        '&:hover': { borderColor: accent, transform: 'translateY(-2px)', bgcolor: selected ? 'rgba(216,163,93,.095)' : 'rgba(255,255,255,.025)' },
+        '&:focus-visible': { outline: `2px solid ${accent}`, outlineOffset: 2 },
+      }}
+    >
+      <Stack direction="row" spacing={1.25} alignItems="flex-start">
+        <Box sx={{ color: accent, display: 'grid', placeItems: 'center', mt: 0.15 }}>
+          {folder.emergency ? <ReportProblemOutlinedIcon fontSize="small" /> : <FolderOutlinedIcon fontSize="small" />}
+        </Box>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography fontWeight={680} noWrap title={folder.title}>{folder.title}</Typography>
+          <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" sx={{ mt: 0.75 }}>
+            <Typography variant="caption" sx={{ color: folder.needsReview > 0 ? accent : 'text.secondary' }}>
+              {folder.needsReview} {folder.emergency ? 'urgent' : 'need review'}
+            </Typography>
+            {!folder.emergency && (
+              <Typography variant="caption" color="text.secondary">{folder.confirmed} confirmed</Typography>
+            )}
+          </Stack>
+        </Box>
+      </Stack>
+    </Paper>
   );
 }
 

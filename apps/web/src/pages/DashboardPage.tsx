@@ -6,6 +6,7 @@ import { Box, Paper, Stack, Typography } from '@mui/material';
 import { useGSAP } from '@gsap/react';
 import gsap from 'gsap';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import { InlineError, ScreenLoader } from '../components/common';
 import { api, getErrorMessage } from '../lib/api';
@@ -17,6 +18,11 @@ interface Metric {
   helper: string;
   icon: React.ReactNode;
   tone: string;
+  to: string;
+}
+
+function hasVideoEvidence(alert: Alert) {
+  return typeof alert.metadata?.videoUrl === 'string' && alert.metadata.videoUrl.length > 0;
 }
 
 export function DashboardPage() {
@@ -50,16 +56,17 @@ export function DashboardPage() {
   const metrics = useMemo<Metric[]>(() => {
     const cameraTotal = cameras.length || 32;
     const onlineTotal = cameras.length ? cameras.filter((camera) => camera.isEnabled && camera.status !== 'OFFLINE').length : 32;
-    const needsReview = alerts.filter((alert) => alert.status === 'NEW').length;
+    const videoAlerts = alerts.filter(hasVideoEvidence);
+    const needsReview = videoAlerts.filter((alert) => alert.status === 'NEW').length;
     const today = new Date().toDateString();
-    const incidentsToday = alerts.filter((alert) => new Date(alert.detectedAt).toDateString() === today).length;
-    const reviewedToday = alerts.filter((alert) => alert.status === 'RESOLVED' || alert.status === 'DISMISSED').length;
+    const incidentsToday = videoAlerts.filter((alert) => new Date(alert.detectedAt).toDateString() === today).length;
+    const confirmedTotal = videoAlerts.filter((alert) => alert.status === 'RESOLVED' && alert.type !== 'WEAPON_DETECTED').length;
 
     return [
-      { label: 'Cameras online', value: `${onlineTotal}/${cameraTotal}`, helper: 'Live now', icon: <CameraAltOutlinedIcon />, tone: '#78B990' },
-      { label: 'Alerts to review', value: String(needsReview), helper: needsReview ? 'Needs your decision' : 'Nothing waiting', icon: <NotificationsActiveOutlinedIcon />, tone: needsReview ? '#E06B65' : '#78B990' },
-      { label: 'Alerts today', value: String(incidentsToday), helper: 'Detected since midnight', icon: <AccessTimeOutlinedIcon />, tone: '#D8A35D' },
-      { label: 'Reviewed', value: String(reviewedToday), helper: 'Decisions recorded', icon: <CheckCircleOutlineIcon />, tone: '#72A7B5' },
+      { label: 'Cameras online', value: `${onlineTotal}/${cameraTotal}`, helper: 'View live cameras', icon: <CameraAltOutlinedIcon />, tone: '#78B990', to: '/cameras?status=LIVE' },
+      { label: 'Alerts to review', value: String(needsReview), helper: needsReview ? 'Needs your decision' : 'Nothing waiting', icon: <NotificationsActiveOutlinedIcon />, tone: needsReview ? '#E06B65' : '#78B990', to: '/alerts?section=attention' },
+      { label: 'Alerts today', value: String(incidentsToday), helper: 'View alerts since midnight', icon: <AccessTimeOutlinedIcon />, tone: '#D8A35D', to: '/alerts?period=today' },
+      { label: 'Confirmed', value: String(confirmedTotal), helper: 'View confirmed incidents', icon: <CheckCircleOutlineIcon />, tone: '#72A7B5', to: '/alerts?section=confirmed' },
     ];
   }, [alerts, cameras]);
 
@@ -80,7 +87,25 @@ export function DashboardPage() {
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(4, minmax(0, 1fr))' }, gridAutoFlow: 'dense', gap: 1.5 }}>
         {metrics.map((metric) => (
-          <Paper key={metric.label} className="overview-metric" variant="outlined" sx={{ p: { xs: 2.5, md: 3 }, minHeight: 178, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <Paper
+            key={metric.label}
+            component={RouterLink}
+            to={metric.to}
+            className="overview-metric"
+            variant="outlined"
+            sx={{
+              p: { xs: 2.5, md: 3 },
+              minHeight: 178,
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              color: 'inherit',
+              textDecoration: 'none',
+              transition: 'border-color 180ms ease, transform 180ms ease, background-color 180ms ease',
+              '&:hover': { borderColor: metric.tone, transform: 'translateY(-2px)', bgcolor: 'rgba(255,255,255,.018)' },
+              '&:focus-visible': { outline: `2px solid ${metric.tone}`, outlineOffset: 3 },
+            }}
+          >
             <Box sx={{ color: metric.tone, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Typography color="text.secondary" fontWeight={600}>{metric.label}</Typography>
               {metric.icon}

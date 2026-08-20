@@ -8,6 +8,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useGSAP } from '@gsap/react';
 import gsap from 'gsap';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import { EmptyState, InlineError, ScreenLoader } from '../components/common';
 import { api, getErrorMessage } from '../lib/api';
@@ -71,7 +72,15 @@ export function CamerasPage() {
   const pageRef = useRef<HTMLDivElement>(null);
   const restoredScrollRef = useRef(false);
   const { store } = useAuth();
-  const [preferences, setPreferences] = useState<CameraPreferences>(restorePreferences);
+  const [searchParams] = useSearchParams();
+  const [preferences, setPreferences] = useState<CameraPreferences>(() => {
+    const restored = restorePreferences();
+    const requestedStatus = searchParams.get('status');
+    return {
+      ...restored,
+      status: requestedStatus === 'LIVE' || requestedStatus === 'OFFLINE' ? requestedStatus : restored.status,
+    };
+  });
   const [selectedFeedId, setSelectedFeedId] = useState<string | null>(null);
 
   const {

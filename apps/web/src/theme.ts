@@ -30,7 +30,7 @@ export const theme = createTheme({
   },
   shape: { borderRadius: 6 },
   typography: {
-    fontFamily: 'Geist, "Aptos", "Segoe UI", sans-serif',
+    fontFamily: '"Outfit Variable", Outfit, "Aptos", "Segoe UI", sans-serif',
     h4: { fontWeight: 520, letterSpacing: '-0.045em' },
     h5: { fontWeight: 560, letterSpacing: '-0.035em' },
     h6: { fontWeight: 600, letterSpacing: '-0.02em' },
