@@ -81,7 +81,7 @@ type alertResponse struct {
 
 type evidenceResponse struct {
 	ID              string    `json:"id"`
-	StorageKey      string    `json:"storageKey"`
+	StorageKey      string    `json:"-"`
 	MimeType        string    `json:"mimeType"`
 	DurationSeconds int       `json:"durationSeconds"`
 	StartsAt        time.Time `json:"startsAt"`

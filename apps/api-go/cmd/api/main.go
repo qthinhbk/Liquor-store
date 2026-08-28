@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/liquor-store/security-api/internal/config"
+	"github.com/liquor-store/security-api/internal/notifications"
 	"github.com/liquor-store/security-api/internal/server"
 )
 
@@ -40,9 +41,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	runtimeContext, stopRuntime := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopRuntime()
+
+	var reviewService *notifications.SecureReviewService
+	if cfg.PublicAPIBaseURL != "" && cfg.EvidenceOriginBaseURL != "" {
+		reviewService, err = notifications.NewSecureReviewService(db, cfg.PublicAPIBaseURL, cfg.EvidenceOriginBaseURL, cfg.EvidenceOriginAuthToken, cfg.SecureVideoLinkTTL)
+		if err != nil {
+			logger.Error("configure secure evidence review", "error", err)
+			os.Exit(1)
+		}
+	}
+	apiServer := server.New(cfg, db, logger)
+	apiServer.SetSecureReviewService(reviewService)
 	httpServer := &http.Server{
-		Addr: cfg.Address(), Handler: server.New(cfg, db, logger).Handler(),
-		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+		Addr: cfg.Address(), Handler: apiServer.Handler(),
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second,
+	}
+	if cfg.NotificationWorkerEnabled {
+		telegram := notifications.NewTelegramSender(notifications.NewEnvCredentialResolver(), notifications.TelegramSenderOptions{})
+		worker := notifications.NewWorker(db, logger, []notifications.Sender{telegram}, reviewService, notifications.WorkerOptions{
+			PollInterval: cfg.NotificationPollInterval, LeaseDuration: cfg.NotificationLeaseDuration, BatchSize: cfg.NotificationBatchSize,
+		})
+		go worker.Run(runtimeContext)
+		logger.Info("notification worker enabled", "batchSize", cfg.NotificationBatchSize, "secureReviewLinks", reviewService != nil)
 	}
 	go func() {
 		logger.Info("API listening", "address", httpServer.Addr)
@@ -52,9 +74,7 @@ func main() {
 		}
 	}()
 
-	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	<-shutdownSignal.Done()
+	<-runtimeContext.Done()
 	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
 	if err := httpServer.Shutdown(shutdownContext); err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/liquor-store/security-api/internal/config"
+	"github.com/liquor-store/security-api/internal/notifications"
 )
 
 type Server struct {
@@ -20,6 +21,7 @@ type Server struct {
 	config config.Config
 	log    *slog.Logger
 	limits *rateLimitStore
+	review *notifications.SecureReviewService
 }
 
 type principal struct {
@@ -40,9 +42,14 @@ func New(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) *Server {
 	return &Server{db: db, config: cfg, log: logger, limits: newRateLimitStore(10_000)}
 }
 
+func (s *Server) SetSecureReviewService(review *notifications.SecureReviewService) {
+	s.review = review
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.health)
+	mux.HandleFunc("GET /api/v1/notification-review/{token}", s.reviewNotificationEvidence)
 	if s.config.RegisterEnabled {
 		mux.Handle("POST /api/v1/auth/register", s.authEndpoint("register", 3, time.Hour, http.HandlerFunc(s.register)))
 	}
@@ -86,6 +93,23 @@ func (s *Server) Handler() http.Handler {
 	s.protected(mux, "POST /api/v1/stores/{storeId}/alerts/{alertId}/acknowledge", s.acknowledgeAlert)
 	s.protected(mux, "POST /api/v1/stores/{storeId}/alerts/{alertId}/dismiss", s.dismissAlert)
 	s.protected(mux, "POST /api/v1/stores/{storeId}/alerts/{alertId}/resolve", s.resolveAlert)
+	s.protected(mux, "GET /api/v1/stores/{storeId}/alerts/{alertId}/evidence/{evidenceId}/playback-url", s.createEvidencePlaybackURL)
+
+	s.protected(mux, "GET /api/v1/stores/{storeId}/notification-endpoints", s.listNotificationEndpoints)
+	s.protected(mux, "POST /api/v1/stores/{storeId}/notification-endpoints", s.createNotificationEndpoint)
+	s.protected(mux, "PATCH /api/v1/stores/{storeId}/notification-endpoints/{endpointId}", s.updateNotificationEndpoint)
+	s.protected(mux, "DELETE /api/v1/stores/{storeId}/notification-endpoints/{endpointId}", s.removeNotificationEndpoint)
+	s.protected(mux, "POST /api/v1/stores/{storeId}/notification-endpoints/{endpointId}/test", s.testNotificationEndpoint)
+	s.protected(mux, "GET /api/v1/stores/{storeId}/notification-rules", s.listNotificationRules)
+	s.protected(mux, "POST /api/v1/stores/{storeId}/notification-rules", s.createNotificationRule)
+	s.protected(mux, "PATCH /api/v1/stores/{storeId}/notification-rules/{ruleId}", s.updateNotificationRule)
+	s.protected(mux, "DELETE /api/v1/stores/{storeId}/notification-rules/{ruleId}", s.removeNotificationRule)
+	s.protected(mux, "GET /api/v1/stores/{storeId}/notification-rules/{ruleId}/channels", s.listNotificationRuleChannels)
+	s.protected(mux, "POST /api/v1/stores/{storeId}/notification-rules/{ruleId}/channels", s.createNotificationRuleChannel)
+	s.protected(mux, "PATCH /api/v1/stores/{storeId}/notification-rules/{ruleId}/channels/{channelId}", s.updateNotificationRuleChannel)
+	s.protected(mux, "DELETE /api/v1/stores/{storeId}/notification-rules/{ruleId}/channels/{channelId}", s.removeNotificationRuleChannel)
+	s.protected(mux, "GET /api/v1/stores/{storeId}/notification-deliveries", s.listNotificationDeliveries)
+	s.protected(mux, "GET /api/v1/stores/{storeId}/notification-deliveries/{deliveryId}", s.findNotificationDelivery)
 
 	return s.recoverer(s.securityHeaders(s.cors(s.requestLog(mux))))
 }
@@ -179,7 +203,11 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		next.ServeHTTP(w, r)
-		s.log.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/api/v1/notification-review/") {
+			path = "/api/v1/notification-review/[redacted]"
+		}
+		s.log.Info("request", "method", r.Method, "path", path, "duration", time.Since(started))
 	})
 }
 
