@@ -77,6 +77,7 @@ type alertResponse struct {
 	CameraName            *string         `json:"cameraName"`
 	ZoneID                *string         `json:"zoneId"`
 	ZoneName              *string         `json:"zoneName"`
+	HasVideoEvidence      bool            `json:"hasVideoEvidence"`
 }
 
 type evidenceResponse struct {

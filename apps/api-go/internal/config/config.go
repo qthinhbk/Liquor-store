@@ -27,15 +27,18 @@ type Config struct {
 	MembersEnabled  bool
 	SwaggerEnabled  bool
 	TrustProxy      bool
+	AIIngestToken   string
 
-	NotificationWorkerEnabled bool
-	NotificationPollInterval  time.Duration
-	NotificationLeaseDuration time.Duration
-	NotificationBatchSize     int
-	PublicAPIBaseURL          string
-	SecureVideoLinkTTL        time.Duration
-	EvidenceOriginBaseURL     string
-	EvidenceOriginAuthToken   string
+	NotificationWorkerEnabled  bool
+	NotificationPollInterval   time.Duration
+	NotificationLeaseDuration  time.Duration
+	NotificationBatchSize      int
+	PublicAPIBaseURL           string
+	SecureVideoLinkTTL         time.Duration
+	EvidenceOriginBaseURL      string
+	EvidenceOriginAuthToken    string
+	WhatsAppWebhookVerifyToken string
+	WhatsAppAppSecret          string
 }
 
 func Load() (Config, error) {
@@ -84,15 +87,18 @@ func Load() (Config, error) {
 		MembersEnabled:  boolValue("MEMBER_MANAGEMENT_ENABLED", false),
 		SwaggerEnabled:  boolValue("SWAGGER_ENABLED", environment != "production"),
 		TrustProxy:      boolValue("TRUST_PROXY", false),
+		AIIngestToken:   strings.TrimSpace(os.Getenv("AI_INGEST_TOKEN")),
 
-		NotificationWorkerEnabled: boolValue("NOTIFICATION_WORKER_ENABLED", false),
-		NotificationPollInterval:  pollInterval,
-		NotificationLeaseDuration: leaseDuration,
-		NotificationBatchSize:     batchSize,
-		PublicAPIBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_API_BASE_URL")), "/"),
-		SecureVideoLinkTTL:        secureVideoTTL,
-		EvidenceOriginBaseURL:     strings.TrimRight(strings.TrimSpace(os.Getenv("EVIDENCE_ORIGIN_BASE_URL")), "/"),
-		EvidenceOriginAuthToken:   strings.TrimSpace(os.Getenv("EVIDENCE_ORIGIN_AUTH_TOKEN")),
+		NotificationWorkerEnabled:  boolValue("NOTIFICATION_WORKER_ENABLED", false),
+		NotificationPollInterval:   pollInterval,
+		NotificationLeaseDuration:  leaseDuration,
+		NotificationBatchSize:      batchSize,
+		PublicAPIBaseURL:           strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_API_BASE_URL")), "/"),
+		SecureVideoLinkTTL:         secureVideoTTL,
+		EvidenceOriginBaseURL:      strings.TrimRight(strings.TrimSpace(os.Getenv("EVIDENCE_ORIGIN_BASE_URL")), "/"),
+		EvidenceOriginAuthToken:    strings.TrimSpace(os.Getenv("EVIDENCE_ORIGIN_AUTH_TOKEN")),
+		WhatsAppWebhookVerifyToken: strings.TrimSpace(os.Getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN")),
+		WhatsAppAppSecret:          strings.TrimSpace(os.Getenv("WHATSAPP_APP_SECRET")),
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required")
@@ -110,6 +116,15 @@ func Load() (Config, error) {
 	}
 	if cfg.NotificationWorkerEnabled && cfg.NotificationLeaseDuration <= 10*time.Second {
 		return Config{}, errors.New("NOTIFICATION_LEASE_DURATION must be greater than 10s when the notification worker is enabled")
+	}
+	if cfg.AIIngestToken != "" && len(cfg.AIIngestToken) < 32 {
+		return Config{}, errors.New("AI_INGEST_TOKEN must be at least 32 characters when configured")
+	}
+	if cfg.NotificationWorkerEnabled && (cfg.PublicAPIBaseURL == "" || cfg.EvidenceOriginBaseURL == "") {
+		return Config{}, errors.New("PUBLIC_API_BASE_URL and EVIDENCE_ORIGIN_BASE_URL are required when the notification worker is enabled")
+	}
+	if (cfg.WhatsAppWebhookVerifyToken == "") != (cfg.WhatsAppAppSecret == "") {
+		return Config{}, errors.New("WHATSAPP_WEBHOOK_VERIFY_TOKEN and WHATSAPP_APP_SECRET must be configured together")
 	}
 	for name, value := range map[string]string{
 		"PUBLIC_API_BASE_URL":      cfg.PublicAPIBaseURL,

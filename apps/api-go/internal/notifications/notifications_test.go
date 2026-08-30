@@ -110,7 +110,7 @@ func TestResolveTemplateVersion(t *testing.T) {
 	if ResolveTemplateVersion(ProviderTelegram, nil) != TelegramTemplateVersion {
 		t.Fatal("telegram default version mismatch")
 	}
-	if ResolveTemplateVersion(ProviderWhatsApp, nil) != WhatsAppTemplateVersion {
+	if ResolveTemplateVersion(ProviderWhatsApp, nil) != WhatsAppDefaultTemplateVersion {
 		t.Fatal("whatsapp default version mismatch")
 	}
 	override := json.RawMessage(`{"templateVersion":"whatsapp-emergency-security-alert-v9"}`)
@@ -167,7 +167,7 @@ func TestBuildAlertPayloadIsOwnerSafe(t *testing.T) {
 			t.Fatalf("payload leaks storage locator %q: %s", forbidden, text)
 		}
 	}
-	for _, required := range []string{`"alertId":"alert-1"`, `"evidenceId":"evidence-1"`, `"dashboardPath":"/#/alerts/alert-1"`, `Emergency security review`} {
+	for _, required := range []string{`"alertId":"alert-1"`, `"evidenceId":"evidence-1"`, `"dashboardPath":"/#/alerts?alertId=alert-1"`, `Emergency security review`} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("payload missing %s: %s", required, text)
 		}
@@ -205,7 +205,7 @@ func TestValidateConfigObject(t *testing.T) {
 	if err := ValidateConfigObject([]byte(`{"note":"EAA` + strings.Repeat("b", 25) + `"}`)); err == nil {
 		t.Fatal("meta token-like values must be rejected")
 	}
-	nested := `{"optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"},"wabaId":"123","templateName":"emergency_security_alert","templateLanguage":"en_US"}`
+	nested := `{"optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"},"wabaId":"123","templateName":"emergency_security_alert","templateLanguage":"en"}`
 	if err := ValidateConfigObject([]byte(nested)); err != nil {
 		t.Fatalf("whatsapp-shaped config rejected: %v", err)
 	}
@@ -267,9 +267,13 @@ func TestMaskDestination(t *testing.T) {
 }
 
 func TestValidateWhatsAppEnableConfig(t *testing.T) {
-	valid := `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"whatsapp-emergency-alerts-v1"}}`
+	valid := `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"whatsapp-emergency-alerts-v1"}}`
 	if err := ValidateWhatsAppEnableConfig("111122223333", "+15551234567", json.RawMessage(valid)); err != nil {
 		t.Fatalf("valid WhatsApp enable config rejected: %v", err)
+	}
+	linked := `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v2","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"whatsapp-emergency-alerts-v1"}}`
+	if err := ValidateWhatsAppEnableConfig("111122223333", "+15551234567", json.RawMessage(linked)); err != nil {
+		t.Fatalf("valid linked WhatsApp config rejected: %v", err)
 	}
 	for _, badPhoneID := range []string{"", "abc", "11-11", "+111122223333", "111122223333444455555"} {
 		if err := ValidateWhatsAppEnableConfig(badPhoneID, "+15551234567", json.RawMessage(valid)); err == nil {
@@ -293,15 +297,15 @@ func TestValidateWhatsAppEnableConfig(t *testing.T) {
 		}
 	}
 	cases := map[string]string{
-		"missing wabaId":        `{"templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
-		"wrong templateName":    `{"wabaId":"111","templateName":"promo","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
+		"missing wabaId":        `{"templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
+		"wrong templateName":    `{"wabaId":"111","templateName":"promo","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
 		"wrong language":        `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"fr_FR","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
-		"wrong version":         `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"other-v2","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
-		"missing version":       `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
-		"missing optIn":         `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1"}`,
-		"bad capturedAt":        `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"08/24/2026","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
-		"missing source":        `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","policyVersion":"v1"}}`,
-		"missing policyVersion": `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD"}}`,
+		"wrong version":         `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"other-v2","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
+		"missing version":       `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
+		"missing optIn":         `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1"}`,
+		"bad capturedAt":        `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"08/24/2026","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`,
+		"missing source":        `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","policyVersion":"v1"}}`,
+		"missing policyVersion": `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD"}}`,
 	}
 	for name, config := range cases {
 		if err := ValidateWhatsAppEnableConfig("111122223333", "+15551234567", json.RawMessage(config)); err == nil {

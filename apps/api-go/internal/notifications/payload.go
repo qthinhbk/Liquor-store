@@ -3,6 +3,7 @@ package notifications
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -79,7 +80,7 @@ func BuildAlertPayload(input AlertNotificationInput) RenderPayload {
 		EvidenceID:            SanitizeText(input.EvidenceID, 64),
 	}
 	if alertID != "" {
-		payload.DashboardPath = "/#/alerts/" + alertID
+		payload.DashboardPath = "/#/alerts?alertId=" + url.QueryEscape(alertID)
 	}
 	return payload
 }
@@ -250,16 +251,17 @@ func ValidateWhatsAppEnableConfig(providerAccountRef, destinationRef string, con
 		return configIssue{"config.wabaId must be a non-empty decimal WhatsApp Business Account ID."}
 	}
 	templateName, _ := parsed["templateName"].(string)
-	if strings.TrimSpace(templateName) != WhatsAppTemplateName {
-		return configIssue{fmt.Sprintf("config.templateName must be %s.", WhatsAppTemplateName)}
-	}
 	templateLanguage, _ := parsed["templateLanguage"].(string)
-	if strings.TrimSpace(templateLanguage) != WhatsAppTemplateLanguage {
-		return configIssue{fmt.Sprintf("config.templateLanguage must be %s.", WhatsAppTemplateLanguage)}
-	}
 	templateVersion, _ := parsed["templateVersion"].(string)
-	if strings.TrimSpace(templateVersion) != WhatsAppTemplateVersion {
-		return configIssue{fmt.Sprintf("config.templateVersion must be %s until a new template revision is reviewed and this policy is updated.", WhatsAppTemplateVersion)}
+	contract, supported := whatsAppContractForVersion(strings.TrimSpace(templateVersion))
+	if !supported {
+		return configIssue{fmt.Sprintf("config.templateVersion must be %s or %s.", WhatsAppTemplateVersion, WhatsAppLinkedTemplateVersion)}
+	}
+	if strings.TrimSpace(templateName) != contract.Name {
+		return configIssue{fmt.Sprintf("config.templateName must be %s for %s.", contract.Name, contract.Version)}
+	}
+	if strings.TrimSpace(templateLanguage) != contract.Language {
+		return configIssue{fmt.Sprintf("config.templateLanguage must be %s.", contract.Language)}
 	}
 	rawOptIn, present := parsed["optIn"]
 	if !present {
@@ -303,7 +305,7 @@ func ResolveTemplateVersion(provider Provider, config json.RawMessage) string {
 	case ProviderTelegram:
 		fallback = TelegramTemplateVersion
 	case ProviderWhatsApp:
-		fallback = WhatsAppTemplateVersion
+		fallback = WhatsAppDefaultTemplateVersion
 	default:
 		return ""
 	}

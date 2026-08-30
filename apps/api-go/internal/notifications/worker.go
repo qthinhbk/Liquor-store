@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,9 @@ const (
 	WorkerCodeEndpointDisabled  = "notification_endpoint_disabled"
 	WorkerCodeLeaseExpired      = "notification_worker_lease_expired"
 	WorkerCodeUnexpectedError   = "notification_unexpected_error"
+	reviewLinkCleanupInterval   = time.Hour
+	reviewLinkRetention         = 24 * time.Hour
+	maxProviderRetryDelay       = time.Hour
 )
 
 type WorkerOptions struct {
@@ -38,12 +42,15 @@ type Worker struct {
 	links   ReviewLinkBuilder
 	options WorkerOptions
 	now     func() time.Time
+
+	maintenanceMu         sync.Mutex
+	nextReviewLinkCleanup time.Time
 }
 
 type claimedDelivery struct {
 	ID, Kind, StoreID, EndpointID, Provider, TemplateVersion  string
 	AlertID, RuleID, EvidenceID                               *string
-	DestinationRef, CredentialRef                             string
+	ProviderAccountRef, DestinationRef, CredentialRef         string
 	EndpointEnabled                                           bool
 	Config                                                    json.RawMessage
 	Payload                                                   RenderPayload
@@ -103,16 +110,51 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	if err := w.recoverExpiredLeases(ctx); err != nil {
 		return err
 	}
+	if err := w.cleanupExpiredReviewLinks(ctx); err != nil {
+		w.log.Warn("expired notification review link cleanup failed", "errorCode", "notification_review_link_cleanup_failed")
+	}
 	deliveries, err := w.claim(ctx)
 	if err != nil {
 		return err
 	}
+	var workers sync.WaitGroup
+	workers.Add(len(deliveries))
 	for i := range deliveries {
-		if err := w.process(ctx, deliveries[i]); err != nil {
-			w.log.Error("notification delivery processing failed", "deliveryId", deliveries[i].ID, "provider", deliveries[i].Provider, "error", err)
-		}
+		item := deliveries[i]
+		go func() {
+			defer workers.Done()
+			if err := w.process(ctx, item); err != nil {
+				w.log.Error("notification delivery processing failed", "deliveryId", item.ID, "provider", item.Provider, "error", err)
+			}
+		}()
 	}
+	workers.Wait()
 	return nil
+}
+
+func (w *Worker) cleanupExpiredReviewLinks(ctx context.Context) error {
+	now := w.now().UTC()
+	w.maintenanceMu.Lock()
+	if !w.nextReviewLinkCleanup.IsZero() && now.Before(w.nextReviewLinkCleanup) {
+		w.maintenanceMu.Unlock()
+		return nil
+	}
+	w.nextReviewLinkCleanup = now.Add(reviewLinkCleanupInterval)
+	w.maintenanceMu.Unlock()
+
+	cutoff := now.Add(-reviewLinkRetention)
+	_, err := w.db.Exec(ctx, `WITH expired AS (
+  SELECT "id" FROM "notification_video_links"
+  WHERE "expiresAt"<$1 OR ("revokedAt" IS NOT NULL AND "revokedAt"<$1)
+  ORDER BY "expiresAt","id" LIMIT 500
+)
+DELETE FROM "notification_video_links" l USING expired WHERE l."id"=expired."id"`, cutoff)
+	if err != nil {
+		w.maintenanceMu.Lock()
+		w.nextReviewLinkCleanup = now.Add(5 * time.Minute)
+		w.maintenanceMu.Unlock()
+	}
+	return err
 }
 
 func (w *Worker) claim(ctx context.Context) ([]claimedDelivery, error) {
@@ -128,7 +170,7 @@ func (w *Worker) claim(ctx context.Context) ([]claimedDelivery, error) {
 )
 SELECT d."id",d."deliveryKind"::text,d."storeId",d."alertId",d."ruleId",d."endpointId",d."provider"::text,
  d."priority",d."fallbackDelaySeconds",d."templateVersion",d."payload",d."attemptCount",d."maxAttempts",
- e."destinationRef",e."credentialRef",COALESCE(e."config",'{}'::jsonb),e."isEnabled",
+ COALESCE(e."providerAccountRef",''),e."destinationRef",e."credentialRef",COALESCE(e."config",'{}'::jsonb),e."isEnabled",
  NULLIF(d."payload"->>'evidenceId','')
 FROM claimed d JOIN "notification_endpoints" e ON e."id"=d."endpointId" AND e."storeId"=d."storeId"`, w.options.BatchSize, leaseSeconds)
 	if err != nil {
@@ -141,7 +183,7 @@ FROM claimed d JOIN "notification_endpoints" e ON e."id"=d."endpointId" AND e."s
 		var rawPayload []byte
 		if err := rows.Scan(&item.ID, &item.Kind, &item.StoreID, &item.AlertID, &item.RuleID, &item.EndpointID, &item.Provider,
 			&item.Priority, &item.FallbackDelaySeconds, &item.TemplateVersion, &rawPayload, &item.AttemptCount, &item.MaxAttempts,
-			&item.DestinationRef, &item.CredentialRef, &item.Config, &item.EndpointEnabled, &item.EvidenceID); err != nil {
+			&item.ProviderAccountRef, &item.DestinationRef, &item.CredentialRef, &item.Config, &item.EndpointEnabled, &item.EvidenceID); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(rawPayload, &item.Payload); err != nil {
@@ -170,12 +212,14 @@ func (w *Worker) process(ctx context.Context, item claimedDelivery) error {
 		}
 	}
 	request := SendRequest{
-		DeliveryID: item.ID, Provider: Provider(item.Provider), DestinationRef: item.DestinationRef,
+		DeliveryID: item.ID, Provider: Provider(item.Provider), ProviderAccountRef: item.ProviderAccountRef, DestinationRef: item.DestinationRef,
 		CredentialRef: item.CredentialRef, Config: item.Config, TemplateVersion: item.TemplateVersion, Payload: item.Payload,
 	}
 	if request.Provider == ProviderWhatsApp {
-		request.TemplateName = WhatsAppTemplateName
-		request.TemplateLanguage = WhatsAppTemplateLanguage
+		if contract, ok := whatsAppContractForVersion(item.TemplateVersion); ok {
+			request.TemplateName = contract.Name
+			request.TemplateLanguage = contract.Language
+		}
 	}
 	result, err := sender.Send(ctx, request)
 	if err != nil {
@@ -333,8 +377,8 @@ func (w *Worker) retryDelay(attempt int, providerDelay time.Duration) time.Durat
 	if providerDelay > delay {
 		delay = providerDelay
 	}
-	if delay > w.options.MaxBackoff {
-		delay = w.options.MaxBackoff
+	if delay > maxProviderRetryDelay {
+		delay = maxProviderRetryDelay
 	}
 	return delay
 }

@@ -59,8 +59,10 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second,
 	}
 	if cfg.NotificationWorkerEnabled {
-		telegram := notifications.NewTelegramSender(notifications.NewEnvCredentialResolver(), notifications.TelegramSenderOptions{})
-		worker := notifications.NewWorker(db, logger, []notifications.Sender{telegram}, reviewService, notifications.WorkerOptions{
+		resolver := notifications.NewEnvCredentialResolver()
+		telegram := notifications.NewTelegramSender(resolver, notifications.TelegramSenderOptions{})
+		whatsApp := notifications.NewWhatsAppSender(resolver, notifications.WhatsAppSenderOptions{})
+		worker := notifications.NewWorker(db, logger, []notifications.Sender{telegram, whatsApp}, reviewService, notifications.WorkerOptions{
 			PollInterval: cfg.NotificationPollInterval, LeaseDuration: cfg.NotificationLeaseDuration, BatchSize: cfg.NotificationBatchSize,
 		})
 		go worker.Run(runtimeContext)

@@ -29,6 +29,12 @@ type notificationDeliveryResponse struct {
 	AvailableAt       time.Time  `json:"availableAt"`
 	LastAttemptAt     *time.Time `json:"lastAttemptAt"`
 	SentAt            *time.Time `json:"sentAt"`
+	ProviderStatus    *string    `json:"providerStatus"`
+	ProviderStatusAt  *time.Time `json:"providerStatusAt"`
+	DeliveredAt       *time.Time `json:"deliveredAt"`
+	ReadAt            *time.Time `json:"readAt"`
+	ProviderFailedAt  *time.Time `json:"providerFailedAt"`
+	ProviderErrorCode *string    `json:"providerErrorCode"`
 	LastErrorCode     *string    `json:"lastErrorCode"`
 	CreatedAt         time.Time  `json:"createdAt"`
 	UpdatedAt         time.Time  `json:"updatedAt"`
@@ -47,8 +53,18 @@ type notificationAttemptResponse struct {
 	ResponseMetadata  json.RawMessage `json:"responseMetadata"`
 }
 
+type notificationProviderEventResponse struct {
+	ID         string    `json:"id"`
+	Status     string    `json:"status"`
+	EventAt    time.Time `json:"eventAt"`
+	ErrorCode  *string   `json:"errorCode"`
+	ReceivedAt time.Time `json:"receivedAt"`
+}
+
 func (s *Server) reviewNotificationEvidence(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", "private, no-store, max-age=0")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if s.review == nil {
 		writeError(w, http.StatusServiceUnavailable, "Service Unavailable", "Review video is temporarily unavailable.")
 		return
@@ -134,7 +150,7 @@ func (s *Server) listNotificationDeliveries(w http.ResponseWriter, r *http.Reque
 		limit = parsed
 	}
 	values = append(values, limit+1)
-	sql := `SELECT d."id",d."deliveryKind"::text,d."alertId",d."ruleId",d."endpointId",e."label",e."destinationRef",d."provider"::text,d."priority",d."status"::text,d."templateVersion",d."attemptCount",d."maxAttempts",d."availableAt",d."lastAttemptAt",d."sentAt",d."lastErrorCode",d."createdAt",d."updatedAt" FROM "notification_deliveries" d JOIN "notification_endpoints" e ON e."id"=d."endpointId" AND e."storeId"=d."storeId" WHERE ` + strings.Join(conditions, " AND ") + ` ORDER BY d."createdAt" DESC,d."id" DESC LIMIT $` + strconv.Itoa(len(values))
+	sql := `SELECT d."id",d."deliveryKind"::text,d."alertId",d."ruleId",d."endpointId",e."label",e."destinationRef",d."provider"::text,d."priority",d."status"::text,d."templateVersion",d."attemptCount",d."maxAttempts",d."availableAt",d."lastAttemptAt",d."sentAt",d."providerStatus"::text,d."providerStatusAt",d."deliveredAt",d."readAt",d."providerFailedAt",d."providerErrorCode",d."lastErrorCode",d."createdAt",d."updatedAt" FROM "notification_deliveries" d JOIN "notification_endpoints" e ON e."id"=d."endpointId" AND e."storeId"=d."storeId" WHERE ` + strings.Join(conditions, " AND ") + ` ORDER BY d."createdAt" DESC,d."id" DESC LIMIT $` + strconv.Itoa(len(values))
 	rows, err := s.db.Query(r.Context(), sql, values...)
 	if err != nil {
 		s.internalError(w, err)
@@ -145,7 +161,7 @@ func (s *Server) listNotificationDeliveries(w http.ResponseWriter, r *http.Reque
 	for rows.Next() {
 		var item notificationDeliveryResponse
 		var destination string
-		if err := rows.Scan(&item.ID, &item.DeliveryKind, &item.AlertID, &item.RuleID, &item.EndpointID, &item.EndpointLabel, &destination, &item.Provider, &item.Priority, &item.Status, &item.TemplateVersion, &item.AttemptCount, &item.MaxAttempts, &item.AvailableAt, &item.LastAttemptAt, &item.SentAt, &item.LastErrorCode, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.DeliveryKind, &item.AlertID, &item.RuleID, &item.EndpointID, &item.EndpointLabel, &destination, &item.Provider, &item.Priority, &item.Status, &item.TemplateVersion, &item.AttemptCount, &item.MaxAttempts, &item.AvailableAt, &item.LastAttemptAt, &item.SentAt, &item.ProviderStatus, &item.ProviderStatusAt, &item.DeliveredAt, &item.ReadAt, &item.ProviderFailedAt, &item.ProviderErrorCode, &item.LastErrorCode, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			s.internalError(w, err)
 			return
 		}
@@ -173,7 +189,7 @@ func (s *Server) findNotificationDelivery(w http.ResponseWriter, r *http.Request
 	}
 	var item notificationDeliveryResponse
 	var destination string
-	err := s.db.QueryRow(r.Context(), `SELECT d."id",d."deliveryKind"::text,d."alertId",d."ruleId",d."endpointId",e."label",e."destinationRef",d."provider"::text,d."priority",d."status"::text,d."templateVersion",d."attemptCount",d."maxAttempts",d."availableAt",d."lastAttemptAt",d."sentAt",d."lastErrorCode",d."createdAt",d."updatedAt" FROM "notification_deliveries" d JOIN "notification_endpoints" e ON e."id"=d."endpointId" AND e."storeId"=d."storeId" WHERE d."id"=$1 AND d."storeId"=$2`, deliveryID, storeID).Scan(&item.ID, &item.DeliveryKind, &item.AlertID, &item.RuleID, &item.EndpointID, &item.EndpointLabel, &destination, &item.Provider, &item.Priority, &item.Status, &item.TemplateVersion, &item.AttemptCount, &item.MaxAttempts, &item.AvailableAt, &item.LastAttemptAt, &item.SentAt, &item.LastErrorCode, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRow(r.Context(), `SELECT d."id",d."deliveryKind"::text,d."alertId",d."ruleId",d."endpointId",e."label",e."destinationRef",d."provider"::text,d."priority",d."status"::text,d."templateVersion",d."attemptCount",d."maxAttempts",d."availableAt",d."lastAttemptAt",d."sentAt",d."providerStatus"::text,d."providerStatusAt",d."deliveredAt",d."readAt",d."providerFailedAt",d."providerErrorCode",d."lastErrorCode",d."createdAt",d."updatedAt" FROM "notification_deliveries" d JOIN "notification_endpoints" e ON e."id"=d."endpointId" AND e."storeId"=d."storeId" WHERE d."id"=$1 AND d."storeId"=$2`, deliveryID, storeID).Scan(&item.ID, &item.DeliveryKind, &item.AlertID, &item.RuleID, &item.EndpointID, &item.EndpointLabel, &destination, &item.Provider, &item.Priority, &item.Status, &item.TemplateVersion, &item.AttemptCount, &item.MaxAttempts, &item.AvailableAt, &item.LastAttemptAt, &item.SentAt, &item.ProviderStatus, &item.ProviderStatusAt, &item.DeliveredAt, &item.ReadAt, &item.ProviderFailedAt, &item.ProviderErrorCode, &item.LastErrorCode, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeError(w, http.StatusNotFound, "Not Found", "Notification delivery was not found.")
@@ -202,5 +218,24 @@ func (s *Server) findNotificationDelivery(w http.ResponseWriter, r *http.Request
 		s.internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"delivery": item, "attempts": attempts})
+	eventRows, err := s.db.Query(r.Context(), `SELECT "id","status"::text,"eventAt","errorCode","receivedAt" FROM "notification_provider_events" WHERE "deliveryId"=$1 ORDER BY "eventAt","receivedAt","id"`, deliveryID)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	defer eventRows.Close()
+	providerEvents := []notificationProviderEventResponse{}
+	for eventRows.Next() {
+		var event notificationProviderEventResponse
+		if err := eventRows.Scan(&event.ID, &event.Status, &event.EventAt, &event.ErrorCode, &event.ReceivedAt); err != nil {
+			s.internalError(w, err)
+			return
+		}
+		providerEvents = append(providerEvents, event)
+	}
+	if err := eventRows.Err(); err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"delivery": item, "attempts": attempts, "providerEvents": providerEvents})
 }

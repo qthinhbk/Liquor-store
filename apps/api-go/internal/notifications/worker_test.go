@@ -17,7 +17,8 @@ func TestWorkerRetryDelay(t *testing.T) {
 		{attempt: 2, want: 4 * time.Second},
 		{attempt: 5, want: 30 * time.Second},
 		{attempt: 1, providerDelay: 9 * time.Second, want: 9 * time.Second},
-		{attempt: 1, providerDelay: time.Hour, want: 30 * time.Second},
+		{attempt: 1, providerDelay: time.Hour, want: time.Hour},
+		{attempt: 1, providerDelay: 24 * time.Hour, want: time.Hour},
 	}
 	for _, tc := range cases {
 		if got := worker.retryDelay(tc.attempt, tc.providerDelay); got != tc.want {

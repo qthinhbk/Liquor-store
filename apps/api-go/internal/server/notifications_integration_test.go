@@ -60,6 +60,7 @@ func newNotifyTestServer(t *testing.T, membersEnabled bool) *notifyTestClient {
 		JWTAudience:     "liquor-store-owner-dashboard",
 		RefreshTTLDays:  30,
 		WebOrigin:       "http://localhost:5173",
+		AIIngestToken:   testAIIngestToken,
 	}
 	cfg.RegisterEnabled = true
 	cfg.MembersEnabled = membersEnabled
@@ -246,7 +247,7 @@ func TestNotificationConfigurationFlow(t *testing.T) {
 	}, http.StatusCreated, &primaryChannel)
 
 	whatsAppConfig := map[string]any{
-		"wabaId": "111122223333", "templateName": "emergency_security_alert", "templateLanguage": "en_US",
+		"wabaId": "111122223333", "templateName": "emergency_security_alert", "templateLanguage": "en",
 		"templateVersion": "whatsapp-emergency-security-alert-v1",
 		"optIn":           map[string]any{"capturedAt": "2026-08-24T00:00:00Z", "source": "OWNER_DASHBOARD", "policyVersion": "whatsapp-emergency-alerts-v1"},
 	}

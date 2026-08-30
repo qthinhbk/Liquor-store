@@ -2,7 +2,7 @@
 
 ## Scope
 
-The first implementation target is Telegram as the priority-1 channel. WhatsApp is modeled in the schema as a priority-2 fallback, but its provider integration is intentionally deferred to a later task: this document adds no WhatsApp client code. The approved-copy candidate, parameter contract, opt-in language and Meta submission checklist are frozen in [whatsapp-emergency-template.md](whatsapp-emergency-template.md).
+Telegram is the priority-1 channel and WhatsApp is the priority-2 fallback. Both provider adapters are implemented and registered in the runtime worker; provider calls remain disabled unless `NOTIFICATION_WORKER_ENABLED=true`. The approved WhatsApp template and parameter contract are recorded in [whatsapp-emergency-template.md](whatsapp-emergency-template.md).
 
 Notifications are sent only for emergency rules configured by the store owner. The initial rule matches `CRITICAL` alerts with `alertTypes = ['WEAPON_DETECTED']` and `cooldownSeconds = 0` (the violence-or-weapon folder). Suspicious-behavior alerts stay on the dashboard only; they never enqueue a delivery unless a future owner-created rule explicitly opts them in.
 
@@ -90,6 +90,7 @@ A rule matches an alert when **both** conditions hold (AND):
 
 ## Outbox, dedupe and delivery guarantee
 
+- Task 6 exposes `POST /api/v1/internal/ai/alerts` behind a dedicated constant-time-compared Bearer token. It validates the store/camera/zone scope and relative video evidence keys before writing. The generated alert UUID, evidence records and matching delivery routes are committed through one PostgreSQL transaction. Replaying `sourceEventId` returns the existing UUID and delivery set without another enqueue.
 - The alert insert and all of its route deliveries commit in **one transaction** (transactional outbox). A crash can never persist an alert without its notifications or vice versa.
 - ALERT-kind deduplication is **incident-scoped** and deterministic. The dedupe key is `alert:{correlationId|alertId}:{ruleId}:{endpointId}` - correlationId preferred when present, alertId otherwise. TemplateVersion is deliberately **not** part of the identity: it stays an immutable snapshot on each delivery for rendering and audit only, so changing template configuration can never accidentally notify the owner twice for the same physical incident.
 - Consequences of this identity:
@@ -135,13 +136,13 @@ The durable payload never contains storage keys, signed/expiring URLs (they woul
 
 The owner-facing message states that the system detected a situation that may be an emergency and asks a human to review the evidence. It must not assert that a crime definitely occurred and must never contact law enforcement automatically.
 
-The WhatsApp provider must render the exact reviewed parameter order documented in [whatsapp-emergency-template.md](whatsapp-emergency-template.md). Version 1 has no URL button. Task 5 completes the provider-independent short-lived link infrastructure; adding a URL/button to WhatsApp still requires a reviewed and Meta-approved template revision.
+The WhatsApp provider renders the exact reviewed parameter order documented in [whatsapp-emergency-template.md](whatsapp-emergency-template.md). The active version 2 contract has a VIDEO header and a dynamic `View alert` URL button. The header receives a fresh short-lived HTTPS evidence URL immediately before each attempt; the URL is never serialized into the durable delivery payload. Version 1 is retained only to interpret immutable historical snapshots.
 
 ## Secret handling
 
-`notification_endpoints.credentialRef` stores only a reference such as `render-secret://telegram/main-bot`. The Telegram bot token and any future WhatsApp access token live in the deployment secret manager and never appear in PostgreSQL, API responses, logs or the frontend bundle.
+`notification_endpoints.credentialRef` stores only a reference such as `env://WHATSAPP_ACCESS_TOKEN`. Telegram and WhatsApp access tokens live in the deployment secret manager and never appear in PostgreSQL, API responses, logs or the frontend bundle.
 
-For a future WhatsApp endpoint: `providerAccountRef` is the Meta Phone Number ID and `config.wabaId` is the WABA ID - both are identifiers, not credentials. Only the Cloud API access token and App Secret are secrets and stay in the deployment secret manager. The reviewed message copy, parameter order and owner opt-in language are frozen in [whatsapp-emergency-template.md](whatsapp-emergency-template.md).
+For a WhatsApp endpoint, `providerAccountRef` is the Meta Phone Number ID and `config.wabaId` is the WABA ID - both are identifiers, not credentials. Only the Cloud API access token and App Secret are secrets and stay in the deployment secret manager. The reviewed message copy, parameter order and owner opt-in language are frozen in [whatsapp-emergency-template.md](whatsapp-emergency-template.md).
 
 For Telegram: `providerAccountRef` identifies the bot (for example its username), `destinationRef` is the target `chat_id`, and `config` holds non-secret options such as parse mode and whether to attach a thumbnail.
 
@@ -161,6 +162,7 @@ erDiagram
   NOTIFICATION_RULE_CHANNEL ||--o{ NOTIFICATION_DELIVERY : instantiates
   ALERT ||--o{ NOTIFICATION_DELIVERY : triggers
   NOTIFICATION_DELIVERY ||--o{ NOTIFICATION_ATTEMPT : records
+  NOTIFICATION_DELIVERY ||--o{ NOTIFICATION_PROVIDER_EVENT : receives
   ALERT ||--o{ NOTIFICATION_VIDEO_LINK : scopes
   NOTIFICATION_DELIVERY ||--o{ NOTIFICATION_VIDEO_LINK : creates
 ```
@@ -174,6 +176,7 @@ erDiagram
 | `notification_rule_channels` | Ordered delivery route per rule: Telegram first, WhatsApp later. |
 | `notification_deliveries` | Transactional outbox row with route snapshot, rendered payload, lease/retry state and final provider message ID. |
 | `notification_attempts` | Immutable per-request provider log. |
+| `notification_provider_events` | Idempotent WhatsApp `sent`/`delivered`/`read`/`failed` receipts linked by provider message ID; raw webhook bodies are not stored. |
 | `notification_video_links` | SHA-256 hash of an opaque, short-lived bearer token scoped to one alert evidence object; raw tokens and storage keys are never stored here. |
 
 ### Store isolation enforced by the database
@@ -218,14 +221,30 @@ Task 4 adds the production `Sender` implementation for Telegram; it performs no 
 - **Success rule**: success requires simultaneously an HTTP 2xx status, parseable JSON, `ok == true` and a non-zero `result.message_id`. Any non-2xx response is an error even if its body claims success; malformed or oversized bodies are classified by HTTP status (429 -> rate limited, 408/5xx -> provider unavailable, 400/401/403/404 -> the corresponding permanent error), and only a malformed 2xx body becomes `telegram_invalid_response`.
 - **Message format**: alert messages contain a fixed header "🚨 Potential emergency — review required", Store / Camera / Detected lines, and a description stating the system detected a situation that may require immediate review with instructions to check footage and follow the store's emergency procedure. They never claim a crime occurred, never claim police were contacted, and never include storage keys, RTSP URLs, credentials, AI confidence or internal identifiers. When Task 5 can resolve evidence, it adds one short-lived opaque review URL. TEST messages state explicitly that they are tests triggered without any real alert.
 
+## WhatsApp Cloud API adapter (task 4)
+
+`NewWhatsAppSender` implements the same provider-independent `Sender` contract. The runtime worker registers it beside Telegram, while `NOTIFICATION_WORKER_ENABLED=false` remains the safe default.
+
+- **Cloud API request**: one `POST https://graph.facebook.com/v25.0/{phone-number-id}/messages` per `Send`, with the access token only in the Bearer header. Redirects are blocked, each request has a finite 15-second default timeout, and response bodies are capped at 64 KB.
+- **Template contracts**: version 2 is the active Meta-approved `emergency_security_alert` contract (`en`, internal version `whatsapp-emergency-security-alert-v2`) and is the default for new deliveries. It contains a VIDEO header, four body parameters and a `View alert` dynamic URL-button suffix containing the alert ID so the dashboard can open that alert directly. Version 1 remains supported only for immutable historical snapshots and has no button; do not select it for newly enqueued deliveries.
+- **Evidence requirement**: ALERT deliveries require the fresh in-memory secure review URL generated immediately before the provider attempt. TEST deliveries may use `config.testVideoUrl`. Links must be public HTTPS URLs and may not contain credentials, fragments, localhost/private IPs or local/internal hostnames. Missing or unsafe evidence fails permanently before any Cloud API call, allowing the audited fallback chain to proceed.
+- **Configuration gate**: the sender revalidates the decimal Meta Phone Number ID, E.164 destination, WABA ID, exact template contract and stored opt-in evidence even though the endpoint API already validates them. The access token is resolved only through `credentialRef`; raw tokens are never read from endpoint JSON.
+- **Failure handling**: network/timeout, 408/5xx, Meta transient codes and rate-limit codes are retryable; invalid credentials, destination, template state or template parameters are permanent. `Retry-After` is honored only from the HTTP header and capped at one hour. Provider response descriptions are discarded so tokens, phone numbers and Meta diagnostic text cannot enter attempts or logs.
+- **Success rule**: an HTTP 2xx response must be valid JSON with a non-empty first `messages[].id`. Stored response metadata is limited to HTTP status and a sanitized provider status.
+- **Live smoke test**: `TestWhatsAppLiveSmoke` is gated by `RUN_WHATSAPP_INTEGRATION_TESTS=1` and requires the token, Phone Number ID, WABA ID, verified E.164 recipient and a public HTTPS test-video URL in the process environment. It sends exactly one message marked as TEST and prints neither identifiers nor secrets.
+
 ## Runtime worker, delivery audit and secure review links (task 5)
 
 - The worker is disabled unless `NOTIFICATION_WORKER_ENABLED=true`. Startup therefore cannot accidentally send queued messages in development, tests or a newly deployed environment.
-- Each cycle recovers expired `PROCESSING` leases, then atomically claims eligible `PENDING`/`RETRY_SCHEDULED` rows with `FOR UPDATE SKIP LOCKED`. Claiming increments `attemptCount` and sets a finite lease.
+- Each cycle recovers expired `PROCESSING` leases, then atomically claims at most the configured batch size of eligible `PENDING`/`RETRY_SCHEDULED` rows with `FOR UPDATE SKIP LOCKED`. Claiming increments `attemptCount` and sets a finite lease. Claimed rows are processed concurrently, bounded by that batch size, so later rows do not spend another delivery's provider timeout waiting for their send to begin.
 - Transient provider failures use exponential backoff, honoring a larger provider `Retry-After` within the configured cap. Permanent failures and exhausted retries mark the route `FAILED` and activate exactly the next `WAITING_FALLBACK` priority after its snapshot delay. A successful route becomes `SENT` and cancels unused fallback siblings.
 - Every provider call or recovered expired lease appends one immutable attempt row. Stored error text is a stable code only; response metadata is allowlisted and never contains provider bodies, destinations, credentials or delivery payloads.
 - `GET /stores/:storeId/notification-deliveries` and `GET /stores/:storeId/notification-deliveries/:deliveryId` are OWNER-only audit APIs. They omit payload JSON, credentials, raw destinations and storage locators.
-- Review tokens are 256-bit random bearer values. PostgreSQL stores only SHA-256 token hashes, scope (`storeId`, `alertId`, `evidenceId`, optional `deliveryId`), expiry/revocation state and access counters. The public review endpoint validates that exact scope and proxies HTTP Range requests through a fixed configured evidence origin; it never redirects to or reveals the origin/storage key.
+- `GET|POST /api/v1/webhooks/whatsapp` implement Meta verification and delivery receipts. POST verifies `X-Hub-Signature-256` over the untouched request body with `WHATSAPP_APP_SECRET`, accepts at most 1 MiB, ignores unknown provider message IDs, and idempotently stores only stable status/timestamp/error-code fields. Provider descriptions, phone numbers, contacts, inbound message content and raw bodies are discarded.
+- WhatsApp receipt updates are monotonic: `READ` cannot be downgraded by a late `DELIVERED`/`SENT`, and a late `FAILED` receipt cannot overwrite a delivery already observed as delivered/read. A valid asynchronous `FAILED` receipt for an otherwise `SENT` but not delivered/read route changes the outbox delivery to `FAILED` and reactivates exactly the next cancelled/waiting fallback priority. Receipt state remains separately visible as `providerStatus` with immutable `providerEvents` in delivery detail.
+- Review tokens are 256-bit random bearer values. PostgreSQL stores only SHA-256 token hashes, scope (`storeId`, `alertId`, `evidenceId`, optional `deliveryId`), expiry/revocation state and access counters. The public review endpoint validates that exact scope, returns `no-store`/`nosniff` response headers, and proxies HTTP Range requests through a fixed configured evidence origin; it never redirects to or reveals the origin/storage key. The worker performs bounded hourly maintenance and removes at most 500 review-link rows per pass once they have been expired or revoked for 24 hours.
+
+Webhook configuration is fail-closed: `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `WHATSAPP_APP_SECRET` must be configured together. They live only in the deployment secret manager/process environment and are never returned by an API or logged.
 - **Error classification** (stable machine-readable codes on the existing transient/permanent error types):
   | Situation | Class | Code |
   | --- | --- | --- |

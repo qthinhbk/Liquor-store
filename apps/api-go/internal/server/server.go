@@ -50,6 +50,11 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/notification-review/{token}", s.reviewNotificationEvidence)
+	mux.HandleFunc("GET /api/v1/webhooks/whatsapp", s.verifyWhatsAppWebhook)
+	mux.HandleFunc("POST /api/v1/webhooks/whatsapp", s.receiveWhatsAppWebhook)
+	if s.config.AIIngestToken != "" {
+		mux.Handle("POST /api/v1/internal/ai/alerts", s.aiIngestEndpoint(http.HandlerFunc(s.ingestAIAlert)))
+	}
 	if s.config.RegisterEnabled {
 		mux.Handle("POST /api/v1/auth/register", s.authEndpoint("register", 3, time.Hour, http.HandlerFunc(s.register)))
 	}
@@ -203,11 +208,7 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		next.ServeHTTP(w, r)
-		path := r.URL.Path
-		if strings.HasPrefix(path, "/api/v1/notification-review/") {
-			path = "/api/v1/notification-review/[redacted]"
-		}
-		s.log.Info("request", "method", r.Method, "path", path, "duration", time.Since(started))
+		s.log.Info("request", "method", r.Method, "path", safeRequestPath(r.URL.Path), "duration", time.Since(started))
 	})
 }
 
@@ -215,12 +216,19 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				s.log.Error("panic recovered", "error", recovered, "path", r.URL.Path)
+				s.log.Error("panic recovered", "error", recovered, "path", safeRequestPath(r.URL.Path))
 				writeError(w, http.StatusInternalServerError, "Internal Server Error", "An unexpected error occurred.")
 			}
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+func safeRequestPath(path string) string {
+	if strings.HasPrefix(path, "/api/v1/notification-review/") {
+		return "/api/v1/notification-review/[redacted]"
+	}
+	return path
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

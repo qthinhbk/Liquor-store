@@ -150,6 +150,17 @@ func TestProtectedRouteRejectsMissingToken(t *testing.T) {
 	}
 }
 
+func TestSafeRequestPathRedactsReviewBearerToken(t *testing.T) {
+	token := "secret-review-token-that-must-never-enter-logs"
+	got := safeRequestPath("/api/v1/notification-review/" + token)
+	if got != "/api/v1/notification-review/[redacted]" {
+		t.Fatalf("review path was not redacted: %q", got)
+	}
+	if got := safeRequestPath("/api/v1/health"); got != "/api/v1/health" {
+		t.Fatalf("ordinary path changed: %q", got)
+	}
+}
+
 func TestOpenAPIDocumentIsValidJSON(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/docs-json", nil)

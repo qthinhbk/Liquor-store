@@ -161,9 +161,13 @@ func TestUnknownPatchFieldsAreRejectedByDecoder(t *testing.T) {
 
 func TestWhatsAppEnableGate(t *testing.T) {
 	optIn := `{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD","policyVersion":"whatsapp-emergency-alerts-v1"}`
-	completeConfig := `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":` + optIn + `}`
+	completeConfig := `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":` + optIn + `}`
 	if err := validateEndpointEnableGate("WHATSAPP", "111122223333", "+15551234567", true, json.RawMessage(completeConfig)); err != nil {
 		t.Fatalf("complete WhatsApp config rejected: %v", err)
+	}
+	linkedConfig := `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v2","optIn":` + optIn + `}`
+	if err := validateEndpointEnableGate("WHATSAPP", "111122223333", "+15551234567", true, json.RawMessage(linkedConfig)); err != nil {
+		t.Fatalf("linked WhatsApp config rejected: %v", err)
 	}
 	if err := validateEndpointEnableGate("WHATSAPP", "", "+15551234567", true, json.RawMessage(completeConfig)); err == nil {
 		t.Fatal("missing Meta Phone Number ID must fail the gate")
@@ -175,15 +179,15 @@ func TestWhatsAppEnableGate(t *testing.T) {
 		name   string
 		config string
 	}{
-		{"missing wabaId", `{"templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":` + optIn + `}`},
-		{"wrong templateName", `{"wabaId":"111","templateName":"other_template","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":` + optIn + `}`},
+		{"missing wabaId", `{"templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":` + optIn + `}`},
+		{"wrong templateName", `{"wabaId":"111","templateName":"other_template","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":` + optIn + `}`},
 		{"wrong language", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"pt_BR","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":` + optIn + `}`},
-		{"wrong version", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v9","optIn":` + optIn + `}`},
-		{"missing version", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","optIn":` + optIn + `}`},
-		{"missing optIn", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1"}`},
-		{"bad capturedAt", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"yesterday","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`},
-		{"missing source", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","policyVersion":"v1"}}`},
-		{"missing policyVersion", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en_US","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD"}}`},
+		{"wrong version", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v9","optIn":` + optIn + `}`},
+		{"missing version", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","optIn":` + optIn + `}`},
+		{"missing optIn", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1"}`},
+		{"bad capturedAt", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"yesterday","source":"OWNER_DASHBOARD","policyVersion":"v1"}}`},
+		{"missing source", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","policyVersion":"v1"}}`},
+		{"missing policyVersion", `{"wabaId":"111","templateName":"emergency_security_alert","templateLanguage":"en","templateVersion":"whatsapp-emergency-security-alert-v1","optIn":{"capturedAt":"2026-08-24T00:00:00Z","source":"OWNER_DASHBOARD"}}`},
 	} {
 		if err := validateEndpointEnableGate("WHATSAPP", "111122223333", "+15551234567", true, json.RawMessage(mutation.config)); err == nil {
 			t.Fatalf("%s must fail the enable gate", mutation.name)
@@ -201,7 +205,7 @@ func TestTemplateVersionResolutionForEndpoints(t *testing.T) {
 	if notifications.ResolveTemplateVersion(notifications.ProviderTelegram, nil) != "telegram-emergency-security-alert-v1" {
 		t.Fatal("telegram template version default changed unexpectedly")
 	}
-	if notifications.ResolveTemplateVersion(notifications.ProviderWhatsApp, nil) != "whatsapp-emergency-security-alert-v1" {
+	if notifications.ResolveTemplateVersion(notifications.ProviderWhatsApp, nil) != "whatsapp-emergency-security-alert-v2" {
 		t.Fatal("whatsapp template version default changed unexpectedly")
 	}
 }
@@ -278,6 +282,7 @@ func TestOpenAPIDocumentsNotificationPaths(t *testing.T) {
 		"/api/v1/stores/{storeId}/notification-deliveries/{deliveryId}",
 		"/api/v1/stores/{storeId}/alerts/{alertId}/evidence/{evidenceId}/playback-url",
 		"/api/v1/notification-review/{token}",
+		"/api/v1/webhooks/whatsapp",
 	} {
 		if _, ok := document.Paths[path]; !ok {
 			t.Fatalf("openapi.json is missing path %s", path)
@@ -385,6 +390,12 @@ func TestPublicReviewRouteFailsClosedWhenUnconfigured(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), "abcdefghijklmnopqrstuvwxyz") {
 		t.Fatal("review bearer token leaked into response")
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "private, no-store, max-age=0" {
+		t.Fatalf("review cache policy = %q", got)
+	}
+	if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("review content-type policy = %q", got)
 	}
 }
 

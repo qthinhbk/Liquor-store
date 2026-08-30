@@ -7,15 +7,16 @@ import (
 )
 
 type SendRequest struct {
-	DeliveryID       string
-	Provider         Provider
-	DestinationRef   string
-	CredentialRef    string
-	Config           json.RawMessage
-	TemplateName     string
-	TemplateLanguage string
-	TemplateVersion  string
-	Payload          RenderPayload
+	DeliveryID         string
+	Provider           Provider
+	ProviderAccountRef string
+	DestinationRef     string
+	CredentialRef      string
+	Config             json.RawMessage
+	TemplateName       string
+	TemplateLanguage   string
+	TemplateVersion    string
+	Payload            RenderPayload
 }
 
 type SendResult struct {

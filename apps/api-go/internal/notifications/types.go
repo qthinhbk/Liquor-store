@@ -29,12 +29,37 @@ const (
 )
 
 const (
-	TelegramTemplateVersion  = "telegram-emergency-security-alert-v1"
-	WhatsAppTemplateVersion  = "whatsapp-emergency-security-alert-v1"
-	WhatsAppTemplateName     = "emergency_security_alert"
-	WhatsAppTemplateLanguage = "en_US"
-	MaxAttemptsDefault       = 5
+	TelegramTemplateVersion        = "telegram-emergency-security-alert-v1"
+	WhatsAppTemplateVersion        = "whatsapp-emergency-security-alert-v1"
+	WhatsAppTemplateName           = "emergency_security_alert"
+	WhatsAppLinkedTemplateVersion  = "whatsapp-emergency-security-alert-v2"
+	WhatsAppLinkedTemplateName     = WhatsAppTemplateName
+	WhatsAppTemplateLanguage       = "en"
+	WhatsAppDefaultTemplateVersion = WhatsAppLinkedTemplateVersion
+	MaxAttemptsDefault             = 5
 )
+
+type whatsAppTemplateContract struct {
+	Name           string
+	Language       string
+	Version        string
+	HasAlertButton bool
+}
+
+func whatsAppContractForVersion(version string) (whatsAppTemplateContract, bool) {
+	switch version {
+	case WhatsAppTemplateVersion:
+		return whatsAppTemplateContract{
+			Name: WhatsAppTemplateName, Language: WhatsAppTemplateLanguage, Version: WhatsAppTemplateVersion,
+		}, true
+	case WhatsAppLinkedTemplateVersion:
+		return whatsAppTemplateContract{
+			Name: WhatsAppLinkedTemplateName, Language: WhatsAppTemplateLanguage, Version: WhatsAppLinkedTemplateVersion, HasAlertButton: true,
+		}, true
+	default:
+		return whatsAppTemplateContract{}, false
+	}
+}
 
 type AlertNotificationInput struct {
 	StoreID               string

@@ -128,14 +128,14 @@ func buildAlertQuery(w http.ResponseWriter, q url.Values, storeID string) (strin
 		limit = parsed
 	}
 	values = append(values, limit+1)
-	query := `SELECT a."id",a."sourceEventId",a."correlationId",a."type",a."severity",a."status",a."subjectPersonCategory",a."confidence"::float8,a."detectedAt",a."acknowledgedAt",a."resolutionNote",COALESCE(a."metadata",'null'::jsonb),c."id",c."name",z."id",z."name" FROM "alerts" a LEFT JOIN "cameras" c ON c."id"=a."cameraId" LEFT JOIN "camera_zones" z ON z."id"=a."zoneId" WHERE ` + strings.Join(conditions, " AND ") + ` ORDER BY a."detectedAt" DESC LIMIT $` + itoa(len(values))
+	query := `SELECT a."id",a."sourceEventId",a."correlationId",a."type",a."severity",a."status",a."subjectPersonCategory",a."confidence"::float8,a."detectedAt",a."acknowledgedAt",a."resolutionNote",COALESCE(a."metadata",'null'::jsonb),c."id",c."name",z."id",z."name",EXISTS(SELECT 1 FROM "alert_evidence" e WHERE e."alertId"=a."id" AND e."mimeType" LIKE 'video/%') FROM "alerts" a LEFT JOIN "cameras" c ON c."id"=a."cameraId" LEFT JOIN "camera_zones" z ON z."id"=a."zoneId" WHERE ` + strings.Join(conditions, " AND ") + ` ORDER BY a."detectedAt" DESC LIMIT $` + itoa(len(values))
 	return query, values, limit, true
 }
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanAlert(row rowScanner, item *alertResponse) error {
-	return row.Scan(&item.ID, &item.SourceEventID, &item.CorrelationID, &item.Type, &item.Severity, &item.Status, &item.SubjectPersonCategory, &item.Confidence, &item.DetectedAt, &item.AcknowledgedAt, &item.ResolutionNote, &item.Metadata, &item.CameraID, &item.CameraName, &item.ZoneID, &item.ZoneName)
+	return row.Scan(&item.ID, &item.SourceEventID, &item.CorrelationID, &item.Type, &item.Severity, &item.Status, &item.SubjectPersonCategory, &item.Confidence, &item.DetectedAt, &item.AcknowledgedAt, &item.ResolutionNote, &item.Metadata, &item.CameraID, &item.CameraName, &item.ZoneID, &item.ZoneName, &item.HasVideoEvidence)
 }
 
 func (s *Server) findAlert(w http.ResponseWriter, r *http.Request, user principal) {
@@ -157,7 +157,7 @@ func (s *Server) findAlert(w http.ResponseWriter, r *http.Request, user principa
 
 func (s *Server) loadAlertDetail(ctx context.Context, storeID, alertID string) (alertDetailResponse, error) {
 	var item alertDetailResponse
-	err := s.db.QueryRow(ctx, `SELECT a."id",a."sourceEventId",a."correlationId",a."type",a."severity",a."status",a."subjectPersonCategory",a."confidence"::float8,a."detectedAt",a."acknowledgedAt",a."resolutionNote",COALESCE(a."metadata",'null'::jsonb),c."id",c."name",z."id",z."name",a."storeId",a."observedStartAt",a."observedEndAt",a."acknowledgedById",u."displayName",a."createdAt",a."updatedAt" FROM "alerts" a LEFT JOIN "cameras" c ON c."id"=a."cameraId" LEFT JOIN "camera_zones" z ON z."id"=a."zoneId" LEFT JOIN "users" u ON u."id"=a."acknowledgedById" WHERE a."id"=$1 AND a."storeId"=$2`, alertID, storeID).Scan(&item.ID, &item.SourceEventID, &item.CorrelationID, &item.Type, &item.Severity, &item.Status, &item.SubjectPersonCategory, &item.Confidence, &item.DetectedAt, &item.AcknowledgedAt, &item.ResolutionNote, &item.Metadata, &item.CameraID, &item.CameraName, &item.ZoneID, &item.ZoneName, &item.StoreID, &item.ObservedStartAt, &item.ObservedEndAt, &item.AcknowledgedByID, &item.AcknowledgedByName, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRow(ctx, `SELECT a."id",a."sourceEventId",a."correlationId",a."type",a."severity",a."status",a."subjectPersonCategory",a."confidence"::float8,a."detectedAt",a."acknowledgedAt",a."resolutionNote",COALESCE(a."metadata",'null'::jsonb),c."id",c."name",z."id",z."name",EXISTS(SELECT 1 FROM "alert_evidence" e WHERE e."alertId"=a."id" AND e."mimeType" LIKE 'video/%'),a."storeId",a."observedStartAt",a."observedEndAt",a."acknowledgedById",u."displayName",a."createdAt",a."updatedAt" FROM "alerts" a LEFT JOIN "cameras" c ON c."id"=a."cameraId" LEFT JOIN "camera_zones" z ON z."id"=a."zoneId" LEFT JOIN "users" u ON u."id"=a."acknowledgedById" WHERE a."id"=$1 AND a."storeId"=$2`, alertID, storeID).Scan(&item.ID, &item.SourceEventID, &item.CorrelationID, &item.Type, &item.Severity, &item.Status, &item.SubjectPersonCategory, &item.Confidence, &item.DetectedAt, &item.AcknowledgedAt, &item.ResolutionNote, &item.Metadata, &item.CameraID, &item.CameraName, &item.ZoneID, &item.ZoneName, &item.HasVideoEvidence, &item.StoreID, &item.ObservedStartAt, &item.ObservedEndAt, &item.AcknowledgedByID, &item.AcknowledgedByName, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return alertDetailResponse{}, err
 	}

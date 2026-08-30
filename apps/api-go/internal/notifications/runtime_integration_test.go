@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -25,6 +26,29 @@ type scriptedSender struct {
 	mu       sync.Mutex
 	errors   []error
 	hits     int
+	lastID   string
+}
+
+type concurrencyProbeSender struct {
+	started chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	hits    int
+}
+
+func (s *concurrencyProbeSender) Provider() Provider { return ProviderTelegram }
+func (s *concurrencyProbeSender) Send(ctx context.Context, _ SendRequest) (SendResult, error) {
+	s.mu.Lock()
+	s.hits++
+	messageID := fmt.Sprintf("concurrent-message-%d", s.hits)
+	s.mu.Unlock()
+	s.started <- struct{}{}
+	select {
+	case <-s.release:
+		return SendResult{ProviderMessageID: messageID, ResponseMetadata: map[string]any{"httpStatus": 200}}, nil
+	case <-ctx.Done():
+		return SendResult{}, &TransientSendError{Code: TelegramCodeNetworkError}
+	}
 }
 
 func (s *scriptedSender) Provider() Provider { return s.provider }
@@ -37,7 +61,14 @@ func (s *scriptedSender) Send(_ context.Context, _ SendRequest) (SendResult, err
 		s.errors = s.errors[1:]
 		return SendResult{}, err
 	}
-	return SendResult{ProviderMessageID: "provider-message", ResponseMetadata: map[string]any{"httpStatus": 200, "secret": "drop-me"}}, nil
+	s.lastID = fmt.Sprintf("%s-message-%d", strings.ToLower(string(s.provider)), s.hits)
+	return SendResult{ProviderMessageID: s.lastID, ResponseMetadata: map[string]any{"httpStatus": 200, "secret": "drop-me"}}, nil
+}
+
+func (s *scriptedSender) lastMessageID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastID
 }
 func (s *scriptedSender) queue(err error) {
 	s.mu.Lock()
@@ -67,6 +98,8 @@ func TestNotificationRuntimePostgreSQL(t *testing.T) {
 	telegramChannelID := uuid.NewString()
 	whatsAppEndpointID := uuid.NewString()
 	whatsAppChannelID := uuid.NewString()
+	fallbackTelegramEndpointID := uuid.NewString()
+	fallbackTelegramChannelID := uuid.NewString()
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
@@ -135,6 +168,87 @@ func TestNotificationRuntimePostgreSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertDeliveryStatus(t, ctx, db, alertTwo, whatsAppEndpointID, StatusSent, 1)
+	whatsAppMessageID := whatsApp.lastMessageID()
+	if whatsAppMessageID == "" {
+		t.Fatal("WhatsApp sender did not return a provider message ID")
+	}
+	providerEventAt := time.Now().UTC().Truncate(time.Second)
+	receiptEvents := []WhatsAppStatusEvent{
+		{ProviderMessageID: whatsAppMessageID, Status: ProviderReceiptSent, EventAt: providerEventAt},
+		{ProviderMessageID: whatsAppMessageID, Status: ProviderReceiptRead, EventAt: providerEventAt.Add(2 * time.Second)},
+		{ProviderMessageID: whatsAppMessageID, Status: ProviderReceiptDelivered, EventAt: providerEventAt.Add(time.Second)},
+		{ProviderMessageID: whatsAppMessageID, Status: ProviderReceiptFailed, EventAt: providerEventAt.Add(3 * time.Second), ErrorCode: "131026"},
+	}
+	appliedReceipts, err := ApplyWhatsAppStatusEvents(ctx, db, receiptEvents)
+	if err != nil || appliedReceipts != len(receiptEvents) {
+		t.Fatalf("apply WhatsApp receipts = %d, err=%v", appliedReceipts, err)
+	}
+	duplicateReceipts, err := ApplyWhatsAppStatusEvents(ctx, db, receiptEvents)
+	if err != nil || duplicateReceipts != 0 {
+		t.Fatalf("duplicate WhatsApp receipts = %d, err=%v", duplicateReceipts, err)
+	}
+	unknownReceipts, err := ApplyWhatsAppStatusEvents(ctx, db, []WhatsAppStatusEvent{{ProviderMessageID: "unknown-provider-message", Status: ProviderReceiptRead, EventAt: providerEventAt}})
+	if err != nil || unknownReceipts != 0 {
+		t.Fatalf("unknown WhatsApp receipt = %d, err=%v", unknownReceipts, err)
+	}
+	var providerStatus string
+	var deliveredAt, readAt time.Time
+	var providerFailedAt *time.Time
+	var providerErrorCode *string
+	if err := db.QueryRow(ctx, `SELECT "providerStatus"::text,"deliveredAt","readAt","providerFailedAt","providerErrorCode" FROM "notification_deliveries" WHERE "alertId"=$1 AND "endpointId"=$2`, alertTwo, whatsAppEndpointID).Scan(&providerStatus, &deliveredAt, &readAt, &providerFailedAt, &providerErrorCode); err != nil {
+		t.Fatal(err)
+	}
+	if providerStatus != ProviderReceiptRead || !deliveredAt.Equal(providerEventAt.Add(time.Second)) || !readAt.Equal(providerEventAt.Add(2*time.Second)) || providerFailedAt != nil || providerErrorCode != nil {
+		t.Fatalf("receipt summary was downgraded: status=%s delivered=%s read=%s failed=%v code=%v", providerStatus, deliveredAt, readAt, providerFailedAt, providerErrorCode)
+	}
+	var providerEventCount int
+	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM "notification_provider_events" pe JOIN "notification_deliveries" d ON d."id"=pe."deliveryId" WHERE d."alertId"=$1 AND d."endpointId"=$2`, alertTwo, whatsAppEndpointID).Scan(&providerEventCount); err != nil {
+		t.Fatal(err)
+	}
+	if providerEventCount != len(receiptEvents) {
+		t.Fatalf("stored %d provider events, want %d", providerEventCount, len(receiptEvents))
+	}
+
+	_, err = db.Exec(ctx, `INSERT INTO "notification_endpoints" ("id","storeId","provider","label","destinationRef","credentialRef","config","updatedAt") VALUES ($1,$2,'TELEGRAM','Backup Telegram','67890','env://TEST_TOKEN','{}',NOW())`, fallbackTelegramEndpointID, storeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(ctx, `INSERT INTO "notification_rule_channels" ("id","storeId","ruleId","endpointId","priority","fallbackDelaySeconds","updatedAt") VALUES ($1,$2,$3,$4,3,0,NOW())`, fallbackTelegramChannelID, storeID, ruleID, fallbackTelegramEndpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alertProviderFailure, evidenceProviderFailure := insertRuntimeAlert(t, ctx, db, storeID, "provider-failure-incident")
+	telegram.queue(&PermanentSendError{Code: TelegramCodeForbidden})
+	enqueueRuntimeAlert(t, ctx, db, storeID, alertProviderFailure, evidenceProviderFailure, "provider-failure-incident")
+	if err := worker.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertDeliveryStatus(t, ctx, db, alertProviderFailure, telegramEndpointID, StatusFailed, 1)
+	assertDeliveryStatus(t, ctx, db, alertProviderFailure, whatsAppEndpointID, StatusPending, 0)
+	if err := worker.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertDeliveryStatus(t, ctx, db, alertProviderFailure, whatsAppEndpointID, StatusSent, 1)
+	assertDeliveryStatus(t, ctx, db, alertProviderFailure, fallbackTelegramEndpointID, StatusCancelled, 0)
+	failedWhatsAppMessageID := whatsApp.lastMessageID()
+	appliedFailure, err := ApplyWhatsAppStatusEvents(ctx, db, []WhatsAppStatusEvent{{
+		ProviderMessageID: failedWhatsAppMessageID,
+		Status:            ProviderReceiptFailed,
+		EventAt:           providerEventAt.Add(10 * time.Second),
+		ErrorCode:         "131026",
+	}})
+	if err != nil || appliedFailure != 1 {
+		t.Fatalf("apply asynchronous WhatsApp failure = %d, err=%v", appliedFailure, err)
+	}
+	assertDeliveryStatus(t, ctx, db, alertProviderFailure, whatsAppEndpointID, StatusFailed, 1)
+	assertDeliveryStatus(t, ctx, db, alertProviderFailure, fallbackTelegramEndpointID, StatusPending, 0)
+	if err := worker.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertDeliveryStatus(t, ctx, db, alertProviderFailure, fallbackTelegramEndpointID, StatusSent, 1)
+	if _, err := db.Exec(ctx, `UPDATE "notification_rule_channels" SET "isEnabled"=false,"updatedAt"=NOW() WHERE "id"=$1`, fallbackTelegramChannelID); err != nil {
+		t.Fatal(err)
+	}
 
 	alertLease, evidenceLease := insertRuntimeAlert(t, ctx, db, storeID, "lease-incident")
 	enqueueRuntimeAlert(t, ctx, db, storeID, alertLease, evidenceLease, "lease-incident")
@@ -170,6 +284,37 @@ func TestNotificationRuntimePostgreSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertDeliveryStatus(t, ctx, db, alertLease, telegramEndpointID, StatusSent, 2)
+
+	firstConcurrent := enqueueRuntimeTestDelivery(t, ctx, db, storeID, telegramEndpointID, uuid.NewString())
+	secondConcurrent := enqueueRuntimeTestDelivery(t, ctx, db, storeID, telegramEndpointID, uuid.NewString())
+	probe := &concurrencyProbeSender{started: make(chan struct{}, 2), release: make(chan struct{})}
+	concurrentWorker := NewWorker(db, slog.New(slog.NewTextHandler(io.Discard, nil)), []Sender{probe}, nil, WorkerOptions{
+		BatchSize: 2, LeaseDuration: 15 * time.Second,
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- concurrentWorker.RunOnce(ctx) }()
+	for index := 0; index < 2; index++ {
+		select {
+		case <-probe.started:
+		case <-time.After(time.Second):
+			close(probe.release)
+			<-runDone
+			t.Fatal("claimed deliveries were not started concurrently within the lease window")
+		}
+	}
+	close(probe.release)
+	if err := <-runDone; err != nil {
+		t.Fatal(err)
+	}
+	for _, deliveryID := range []string{firstConcurrent.ID, secondConcurrent.ID} {
+		var status string
+		if err := db.QueryRow(ctx, `SELECT "status"::text FROM "notification_deliveries" WHERE "id"=$1`, deliveryID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != StatusSent {
+			t.Fatalf("concurrent delivery %s status = %s", deliveryID, status)
+		}
+	}
 
 	alertThree, evidenceThree := insertRuntimeAlert(t, ctx, db, storeID, "dedupe-incident")
 	first := enqueueRuntimeAlert(t, ctx, db, storeID, alertThree, evidenceThree, "dedupe-incident")
@@ -262,6 +407,23 @@ func enqueueRuntimeAlert(t *testing.T, ctx context.Context, db *pgxpool.Pool, st
 		t.Fatal(err)
 	}
 	return items
+}
+
+func enqueueRuntimeTestDelivery(t *testing.T, ctx context.Context, db *pgxpool.Pool, storeID, endpointID, requestID string) DeliverySummary {
+	t.Helper()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	delivery, err := EnqueueTestTx(ctx, tx, TestDeliveryInput{StoreID: storeID, EndpointID: endpointID, RequestID: requestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return delivery
 }
 
 func assertDeliveryStatus(t *testing.T, ctx context.Context, db *pgxpool.Pool, alertID, endpointID, wantStatus string, wantAttempts int) {
