@@ -62,6 +62,33 @@ go test -run '^TestProductionEmergencyNotificationE2E$' -count=1 -v ./internal/s
 
 The test prints no alert, store, camera, destination or provider identifiers. It leaves the alert and attempt records in PostgreSQL as production audit evidence.
 
+After the official WhatsApp template becomes active, reuse the cancelled WhatsApp fallback from that controlled alert to verify the real production outbox/worker path. First run the read-only preflight:
+
+```powershell
+$env:RUN_PRODUCTION_WHATSAPP_ALERT_E2E='1'
+go test -run '^TestProductionWhatsAppAlertWorkerE2E$' -count=1 -v ./internal/server
+```
+
+Only after preflight passes, authorize exactly one real-style alert send to the configured test recipient:
+
+```powershell
+$env:RUN_PRODUCTION_WHATSAPP_ALERT_E2E='1'
+$env:CONFIRM_PRODUCTION_WHATSAPP_SEND='SEND_ONE_REAL_STYLE_ALERT'
+go test -run '^TestProductionWhatsAppAlertWorkerE2E$' -count=1 -v ./internal/server
+```
+
+The guarded test creates neither a new alert nor a new delivery. It conditionally activates the existing unused WhatsApp fallback, then requires exactly one successful immutable attempt, a provider-fetched secure video link and a signed `SENT`/`DELIVERED`/`READ` webhook receipt. A rerun observes the already-sent delivery and cannot send another message.
+
+If Meta accepts the request and later reports provider error `131042`, do not immediately resend. This is a WhatsApp Business payment-eligibility failure. In Meta Billing & payments, attach an active payment method directly to the exact WABA, set its currency and required tax/business details, clear any outstanding balance, and wait for Meta to refresh eligibility. Only then may an operator deliberately requeue the same failed controlled delivery for one additional audited attempt.
+
+After the payment issue is confirmed fixed, retry that same failed delivery once—without creating another alert or outbox row:
+
+```powershell
+$env:RUN_PRODUCTION_WHATSAPP_ALERT_E2E='1'
+$env:CONFIRM_PRODUCTION_WHATSAPP_SEND='RETRY_ONE_AFTER_BILLING_FIX_TO_1585'
+go test -run '^TestProductionWhatsAppAlertWorkerE2E$' -count=1 -v ./internal/server
+```
+
 ## Rollback
 
 1. Set `NOTIFICATION_WORKER_ENABLED=false` to stop new sends without deleting audit history.

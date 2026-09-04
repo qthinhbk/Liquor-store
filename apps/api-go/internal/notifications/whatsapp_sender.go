@@ -39,6 +39,7 @@ const (
 	WhatsAppCodeTemplateNotFound      = "whatsapp_template_not_found"
 	WhatsAppCodeInvalidTemplateParams = "whatsapp_invalid_template_parameters"
 	WhatsAppCodeTemplateUnavailable   = "whatsapp_template_unavailable"
+	WhatsAppCodePaymentEligibility    = "whatsapp_payment_eligibility"
 
 	DefaultWhatsAppBaseURL   = "https://graph.facebook.com/v25.0"
 	DefaultWhatsAppTimeout   = 15 * time.Second
@@ -404,6 +405,11 @@ func classifyWhatsAppGraphError(code, subcode int, retryAfter time.Duration) err
 		return &PermanentSendError{Code: WhatsAppCodeForbidden}
 	case 131026, 131030:
 		return &PermanentSendError{Code: WhatsAppCodeInvalidDestination}
+	case 131042:
+		// Billing/eligibility failures require an operator to repair the WABA
+		// payment account. Automatic retries can create a burst once Meta
+		// restores eligibility, so fail closed until configuration is fixed.
+		return &PermanentSendError{Code: WhatsAppCodePaymentEligibility}
 	case 132000:
 		return &PermanentSendError{Code: WhatsAppCodeInvalidTemplateParams}
 	case 132001:

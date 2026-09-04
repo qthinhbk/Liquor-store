@@ -365,6 +365,7 @@ func TestWhatsAppHTTPAndGraphErrorMapping(t *testing.T) {
 		{"graph rate limit", 400, `{"error":{"code":130429}}`, "9", WhatsAppCodeRateLimited, true},
 		{"graph token", 400, `{"error":{"code":190}}`, "", WhatsAppCodeUnauthorized, false},
 		{"graph destination", 400, `{"error":{"code":131026}}`, "", WhatsAppCodeInvalidDestination, false},
+		{"graph payment eligibility", 400, `{"error":{"code":131042}}`, "", WhatsAppCodePaymentEligibility, false},
 		{"graph parameters", 400, `{"error":{"code":132000}}`, "", WhatsAppCodeInvalidTemplateParams, false},
 		{"graph template missing", 400, `{"error":{"code":132001}}`, "", WhatsAppCodeTemplateNotFound, false},
 		{"graph template paused", 400, `{"error":{"code":132015}}`, "", WhatsAppCodeTemplateUnavailable, false},
