@@ -58,6 +58,10 @@ func TestProductionWhatsAppAlertWorkerE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if os.Getenv("PRODUCTION_WHATSAPP_AUDIT_ONLY") == "1" {
+		logProductionWhatsAppAudit(t, ctx, pool, candidate)
+		return
+	}
 	validateProductionWhatsAppCandidate(t, candidate)
 	preflightProductionWhatsAppMeta(t, ctx, candidate)
 	preflightProductionEvidence(t, ctx, candidate.storageKey, candidate.mimeType)
@@ -113,6 +117,20 @@ WHERE "id"=$1 AND "status"='CANCELLED' AND "attemptCount"=0 AND "providerMessage
 	waitForProductionEvidenceFetch(t, ctx, pool, candidate.deliveryID)
 	waitForProductionWhatsAppReceipt(t, ctx, pool, candidate.deliveryID)
 	t.Log("production WhatsApp E2E passed: one real-style ALERT traversed the outbox, worker, provider, secure video link and signed webhook; identifiers were not printed")
+}
+
+func logProductionWhatsAppAudit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, candidate productionWhatsAppAlertCandidate) {
+	t.Helper()
+	var eventCount, secureLinks, fetchedLinks int
+	if err := pool.QueryRow(ctx, `SELECT
+  (SELECT count(*) FROM "notification_provider_events" WHERE "deliveryId"=$1),
+  (SELECT count(*) FROM "notification_video_links" WHERE "deliveryId"=$1),
+  (SELECT count(*) FROM "notification_video_links" WHERE "deliveryId"=$1 AND "accessCount">0)`, candidate.deliveryID).
+		Scan(&eventCount, &secureLinks, &fetchedLinks); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("audit: status=%s attempts=%d providerStatus=%s providerErrorCode=%s webhookEvents=%d secureLinks=%d fetchedLinks=%d",
+		candidate.status, candidate.attemptCount, safeProductionCode(candidate.providerStatus), safeProductionCode(candidate.providerErrorCode), eventCount, secureLinks, fetchedLinks)
 }
 
 func loadProductionWhatsAppAlertCandidate(ctx context.Context, pool *pgxpool.Pool) (productionWhatsAppAlertCandidate, error) {
@@ -366,12 +384,16 @@ func waitForProductionWhatsAppReceipt(t *testing.T, ctx context.Context, pool *p
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
 		var providerStatus *string
+		var providerErrorCode *string
 		var eventCount int
-		err := pool.QueryRow(ctx, `SELECT d."providerStatus"::text,
+		err := pool.QueryRow(ctx, `SELECT d."providerStatus"::text,d."providerErrorCode",
   (SELECT count(*) FROM "notification_provider_events" e WHERE e."deliveryId"=d."id")
-FROM "notification_deliveries" d WHERE d."id"=$1`, deliveryID).Scan(&providerStatus, &eventCount)
+FROM "notification_deliveries" d WHERE d."id"=$1`, deliveryID).Scan(&providerStatus, &providerErrorCode, &eventCount)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if providerStatus != nil && *providerStatus == "FAILED" {
+			t.Fatalf("Meta asynchronously rejected the WhatsApp delivery, providerErrorCode=%s", safeProductionCode(providerErrorCode))
 		}
 		if providerStatus != nil && eventCount > 0 && (*providerStatus == "SENT" || *providerStatus == "DELIVERED" || *providerStatus == "READ") {
 			return
