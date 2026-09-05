@@ -86,6 +86,27 @@ Live provider smoke tests additionally require `NOTIFICATION_TEST_STORE_ID` and 
 
 If proxy CIDRs are empty, the API uses its TCP peer for rate limiting. This is safe against header spoofing but can put clients behind the same ingress into one rate-limit bucket, so production ingress configuration must be checked before rollout. Malformed ranges fail configuration; malformed forwarded chains fall back to the peer IP.
 
+#### Measured Render ingress and applied configuration (05/09/2026)
+
+The ranges were left unset at rollout because the ingress had not been observed. It has since been measured rather than guessed, by performing owner logins against `https://ketchenterprise.net` and reading back `refresh_sessions.ipAddress`, with no local backend process listening at the time. Each configuration was applied to the running service and re-measured:
+
+| `TRUSTED_PROXY_CIDRS` | Recorded address | Meaning |
+|---|---|---|
+| unset, `TRUST_PROXY=false` | `::1` | Forwarded headers ignored; the process is reached over IPv6 loopback |
+| `::1/128,127.0.0.1/32` | `10.30.141.2` | Chain read, but it stops at Render's own private hop |
+| loopback plus RFC1918 and ULA | `104.23.175.39` | The real connecting hop, inside Cloudflare's `104.16.0.0/13` |
+
+The first two states put every caller on one rate-limit key, so a single client could exhaust the login and AI-ingestion limits for everyone, and every refresh session recorded an infrastructure address instead of the connecting one. The deployed value is now:
+
+```
+TRUST_PROXY=true
+TRUSTED_PROXY_CIDRS=::1/128,127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7
+```
+
+Every trusted range is non-routable on the public internet, so this adds no spoofing surface. A remote client cannot present such an address as the TCP peer, and cannot make one the final chain entry either, because Render appends the address it actually accepted the connection from and the chain is read from the right. A forged `X-Forwarded-For` therefore still resolves to the sender's own address; `TestLoopbackIngressResolvesConnectingClient` covers that case directly.
+
+Remaining limitation: browser traffic reaches the API through the Cloudflare Pages proxy, so the resolved address is the Cloudflare egress hop, not the end user. That is a per-hop bucket rather than one global bucket, and direct callers such as AI ingestion now resolve to their true address, but end-user attribution for browser traffic would additionally require authenticated client-IP forwarding from the Pages Function, which is not implemented.
+
 ### 4. Build with a patched toolchain
 
 The module requires Go 1.26.8 or newer. Windows helpers use `GOTOOLCHAIN=auto`, allowing an older launcher to download/select the module's patched toolchain. No global system Go installation was replaced. Pin a supported patched version in deployment tooling and inspect the actual built binary; do not infer production's Go version from local `go.mod` alone.

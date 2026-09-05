@@ -70,4 +70,18 @@ func TestTrustedProxyCIDRConfiguration(t *testing.T) {
 	if err != nil || len(cfg.TrustedProxyCIDRs) != 2 {
 		t.Fatalf("valid proxy config rejected: %v", err)
 	}
+
+	// The deployed Render value: its ingress reaches the process over loopback and
+	// appends its own private address, so both must load unchanged.
+	deployed := "::1/128,127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
+	t.Setenv("TRUSTED_PROXY_CIDRS", deployed)
+	cfg, err = Load()
+	if err != nil || len(cfg.TrustedProxyCIDRs) != 6 {
+		t.Fatalf("deployed ingress proxy config rejected: %v", err)
+	}
+	for i, want := range strings.Split(deployed, ",") {
+		if cfg.TrustedProxyCIDRs[i].String() != want {
+			t.Fatalf("prefix %d altered during load: got %s want %s", i, cfg.TrustedProxyCIDRs[i], want)
+		}
+	}
 }

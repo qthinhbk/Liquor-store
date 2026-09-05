@@ -56,6 +56,74 @@ func TestProxyChainClientIdentity(t *testing.T) {
 	}
 }
 
+// Measured Render ingress: the process is reached over loopback, and the request
+// arrives with Render's own private hop appended last. Both are non-routable, so
+// a remote client can never present either as the peer or as the final hop.
+func renderIngressPrefixes() []netip.Prefix {
+	return []netip.Prefix{
+		netip.MustParsePrefix("::1/128"), netip.MustParsePrefix("127.0.0.1/32"),
+		netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("172.16.0.0/12"),
+		netip.MustParsePrefix("192.168.0.0/16"), netip.MustParsePrefix("fc00::/7"),
+	}
+}
+
+func TestLoopbackIngressResolvesConnectingClient(t *testing.T) {
+	s := &Server{config: config.Config{TrustProxy: true, TrustedProxyCIDRs: renderIngressPrefixes()}}
+	for _, tc := range []struct{ name, peer, xff, want string }{
+		{"observed chain: client then Render hop", "[::1]:443", "203.0.113.10, 10.30.141.2", "203.0.113.10"},
+		{"forged entry ignored, ingress hop wins", "[::1]:443", "1.2.3.4, 203.0.113.10", "203.0.113.10"},
+		{"forged private entry cannot hide the real hop", "[::1]:443", "1.2.3.4, 10.9.9.9, 203.0.113.10, 10.30.141.2", "203.0.113.10"},
+		{"single ingress hop", "[::1]:443", "203.0.113.10", "203.0.113.10"},
+		{"ipv6 client", "[::1]:443", "2401:d800::1, 10.30.141.2", "2401:d800::1"},
+		{"ipv4 loopback peer", "127.0.0.1:443", "203.0.113.10", "203.0.113.10"},
+		{"no forwarded header falls back to peer", "[::1]:443", "", "::1"},
+		{"malformed chain falls back to peer", "[::1]:443", "not-an-ip, 203.0.113.10", "::1"},
+		{"chain of only infrastructure falls back to peer", "[::1]:443", "::1, 10.30.141.2", "::1"},
+		{"non-loopback public peer is never trusted", "203.0.113.99:443", "1.2.3.4", "203.0.113.99"},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = tc.peer
+		if tc.xff != "" {
+			r.Header.Set("X-Forwarded-For", tc.xff)
+		}
+		if got := s.clientIP(r); got != tc.want {
+			t.Errorf("%s: got %s want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Without the fix every request shares one bucket; with it, distinct ingress
+// addresses are limited independently.
+func TestLoopbackIngressSeparatesRateLimitBuckets(t *testing.T) {
+	// The chain observed in production: the connecting hop, then Render's own
+	// private address appended last.
+	request := func(s *Server, client string) string {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = "[::1]:443"
+		r.Header.Set("X-Forwarded-For", client+", 10.30.141.2")
+		return s.clientIP(r)
+	}
+
+	shared := &Server{config: config.Config{TrustProxy: false, TrustedProxyCIDRs: renderIngressPrefixes()}}
+	if request(shared, "203.0.113.10") != request(shared, "198.51.100.7") {
+		t.Fatal("expected the unpatched configuration to collapse clients onto one key")
+	}
+
+	// Trusting loopback alone only advances to Render's private hop, which is
+	// still shared by every client. That was the measured intermediate state.
+	loopbackOnly := &Server{config: config.Config{TrustProxy: true, TrustedProxyCIDRs: []netip.Prefix{
+		netip.MustParsePrefix("::1/128"), netip.MustParsePrefix("127.0.0.1/32"),
+	}}}
+	if request(loopbackOnly, "203.0.113.10") != request(loopbackOnly, "198.51.100.7") {
+		t.Fatal("trusting only loopback should still collapse clients onto Render's private hop")
+	}
+
+	split := &Server{config: config.Config{TrustProxy: true, TrustedProxyCIDRs: renderIngressPrefixes()}}
+	if request(split, "203.0.113.10") == request(split, "198.51.100.7") {
+		t.Fatal("full ingress trust must separate distinct clients into different buckets")
+	}
+}
+
 func TestForgedForwardedIPsCannotBypassAuthLimit(t *testing.T) {
 	s := &Server{config: config.Config{TrustProxy: true, TrustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}}, limits: newRateLimitStore(10000)}
 	handler := s.authEndpoint("login", 10, time.Minute, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
