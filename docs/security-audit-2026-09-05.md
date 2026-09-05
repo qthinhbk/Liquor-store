@@ -1,6 +1,6 @@
 # Backend security review — 05/09/2026
 
-> Update: the findings below describe the original audit state. Local fixes and rollout requirements are recorded in [security-fixes-2026-09-05.md](security-fixes-2026-09-05.md); they have not been deployed to production.
+> Update: the findings below describe the original audit state. Fixes, completed production rollout and the remaining trusted-proxy configuration limitation are recorded in [security-fixes-2026-09-05.md](security-fixes-2026-09-05.md).
 
 Phạm vi: Go backend tại `D:\Liquor-store\apps\api-go`, HEAD `0b0468f`, cùng contract và phần proxy frontend liên quan. Đây là audit để chuẩn bị vá, không phải chứng nhận an toàn hoặc kiểm thử xâm nhập production.
 

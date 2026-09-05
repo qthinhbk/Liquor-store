@@ -1,6 +1,10 @@
 # Backend security fixes — 05/09/2026
 
-Status: implemented and verified; Neon migration applied on 05/09/2026 under the user's deployment request. Application rollout still requires the Render configuration below. This follows [the audit](security-audit-2026-09-05.md) at baseline `0b0468f`. The audit describes the original issues; this document records the fixes.
+Status: deployed to production on 05/09/2026 at 17:55 GMT+7. Neon migration and Render rollout completed under the user's deployment request. Application commit: `576b561a1a102e3a9e331afbda9332bf1c89b721`; [Render deployment](https://dashboard.render.com/web/srv-d9u5cd740ujc73fj6m70/deploys/dep-dadv9ocs728c73fipgo0) reports **Deploy succeeded / Live**. This follows [the audit](security-audit-2026-09-05.md) at baseline `0b0468f`.
+
+Production verification: Go 1.26.8 selected with `GOTOOLCHAIN=go1.26.8`; API and notification worker started successfully with secure review links enabled. Two exact credential bindings were saved and checked against Neon. `TRUST_PROXY=false` is the deployed safe fallback because trusted ingress CIDRs have not been established; login limits currently use the TCP peer and may be shared by clients behind the same ingress. No trusted ranges were guessed.
+
+Seven non-destructive production checks passed: API and frontend proxy health 200; unauthenticated stores/AI ingestion and unsigned WhatsApp webhook 401; login without trusted Origin 403; Swagger 404. Neon verification retained one store, 21 alerts, two deliveries, three attempts and no queued delivery. No test notification or WhatsApp retry was sent.
 
 ## Implemented changes
 
@@ -99,4 +103,4 @@ Go 1.26.8 is available on the [official Go downloads page](https://go.dev/dl/). 
 - The existing secure-link expiry test now explicitly expires its database row instead of sleeping against the independent Windows clock. This preserves the expiry assertion and avoids host/WSL clock drift.
 - Existing worker concurrency fixture now uses separate endpoints, consistent with the new one-pending-test-per-endpoint rule.
 
-Neon migration is complete. No test notification was sent during rollout preparation. Application deployment status must be verified separately; Meta error `131042` is an external billing issue and is not resolved by these security patches.
+Neon migration and application deployment are complete, with production checks recorded above. Meta error `131042` remains an external billing issue and was not retried or resolved by these security patches.
