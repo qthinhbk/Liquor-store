@@ -122,7 +122,7 @@ func (s *TelegramSender) Send(ctx context.Context, request SendRequest) (SendRes
 	if s.resolver == nil {
 		return SendResult{}, &PermanentSendError{Code: TelegramCodeMissingCredential}
 	}
-	token, resolveErr := s.resolver.Resolve(ctx, request.CredentialRef)
+	token, resolveErr := s.resolver.Resolve(ctx, request)
 	if resolveErr != nil {
 		var permanent *PermanentSendError
 		if errors.As(resolveErr, &permanent) {

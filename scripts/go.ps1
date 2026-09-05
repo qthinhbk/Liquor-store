@@ -4,7 +4,7 @@ param(
 )
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$portableGo = Join-Path $repoRoot '.tools\go-1.26.5\bin\go.exe'
+$portableGo = Join-Path $repoRoot '.tools\go-1.26.8\bin\go.exe'
 $systemGo = Get-Command go -ErrorAction SilentlyContinue
 
 if ($systemGo) {
@@ -12,10 +12,11 @@ if ($systemGo) {
 } elseif (Test-Path -LiteralPath $portableGo) {
   $goExecutable = $portableGo
 } else {
-  Write-Error 'Go is not installed. Install Go 1.26.5+ or place the portable SDK at .tools\go-1.26.5.'
+  Write-Error 'Go is not installed. Install Go 1.26.8+ or place the portable SDK at .tools\go-1.26.8.'
   exit 1
 }
 
-$env:GOTOOLCHAIN = 'local'
+# Allow Go to select/download the patched version required by go.mod.
+$env:GOTOOLCHAIN = 'auto'
 & $goExecutable @GoArgs
 exit $LASTEXITCODE

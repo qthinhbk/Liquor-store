@@ -178,6 +178,15 @@ func validateEndpointEnableGate(provider, providerAccountRef, destinationRef str
 	return notifications.ValidateWhatsAppEnableConfig(providerAccountRef, destinationRef, config)
 }
 
+func (s *Server) authorizeNotificationCredential(w http.ResponseWriter, storeID, provider, account, reference string) bool {
+	err := notifications.AuthorizeCredential(s.config.NotificationCredentialBindings, notifications.SendRequest{StoreID: storeID, Provider: notifications.Provider(provider), ProviderAccountRef: account, CredentialRef: reference})
+	if err != nil {
+		writeError(w, http.StatusForbidden, "Forbidden", "This notification credential is not assigned to this store and provider account.")
+		return false
+	}
+	return true
+}
+
 func scanNotificationEndpoint(row rowScanner, item *notificationEndpointResponse) error {
 	var destinationRef, credentialRef string
 	var config []byte
@@ -253,6 +262,9 @@ func (s *Server) createNotificationEndpoint(w http.ResponseWriter, r *http.Reque
 	}
 	if err := validateEndpointEnableGate(provider, derefTrimmed(input.ProviderAccountRef), strings.TrimSpace(*input.DestinationRef), isEnabled, configRaw); err != nil {
 		writeValidationError(w, err)
+		return
+	}
+	if !s.authorizeNotificationCredential(w, storeID, provider, derefTrimmed(input.ProviderAccountRef), derefTrimmed(input.CredentialRef)) {
 		return
 	}
 	endpointID := uuid.NewString()
@@ -359,6 +371,9 @@ func (s *Server) updateNotificationEndpoint(w http.ResponseWriter, r *http.Reque
 		writeValidationError(w, err)
 		return
 	}
+	if (isEnabled || input.CredentialRef != nil || input.ProviderAccountRef != nil) && !s.authorizeNotificationCredential(w, storeID, current.Provider, derefString(accountRef), credentialRef) {
+		return
+	}
 	var item notificationEndpointResponse
 	row := s.db.QueryRow(r.Context(), `UPDATE "notification_endpoints" SET "label"=$3,"providerAccountRef"=$4,"destinationRef"=$5,"credentialRef"=$6,"config"=$7,"isEnabled"=$8,"updatedAt"=NOW() WHERE "id"=$1 AND "storeId"=$2 RETURNING "id","provider"::text,"label","providerAccountRef","destinationRef","credentialRef","config","isEnabled","createdAt","updatedAt"`,
 		endpointID, storeID, label, accountRef, destinationRef, credentialRef, configRaw, isEnabled)
@@ -426,15 +441,30 @@ func (s *Server) testNotificationEndpoint(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "Bad Request", "requestId is required and must be a UUID.")
 		return
 	}
+	var provider, account, credential string
+	if err := s.db.QueryRow(r.Context(), `SELECT "provider"::text,COALESCE("providerAccountRef",''),"credentialRef" FROM "notification_endpoints" WHERE "id"=$1 AND "storeId"=$2`, endpointID, storeID).Scan(&provider, &account, &credential); err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "Not Found", "Notification endpoint was not found.")
+		} else {
+			s.internalError(w, err)
+		}
+		return
+	}
+	if !s.authorizeNotificationCredential(w, storeID, provider, account, credential) {
+		return
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.internalError(w, err)
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
-	summary, err := notifications.EnqueueTestTx(r.Context(), tx, notifications.TestDeliveryInput{StoreID: storeID, EndpointID: endpointID, RequestID: requestID})
+	summary, err := notifications.EnqueueTestTx(r.Context(), tx, notifications.TestDeliveryInput{StoreID: storeID, EndpointID: endpointID, RequestID: requestID, RequestedByID: user.ID})
 	if err != nil {
 		switch {
+		case errors.Is(err, notifications.ErrTestDeliveryLimit):
+			w.Header().Set("Retry-After", "3600")
+			writeError(w, http.StatusTooManyRequests, "Too Many Requests", "Notification test limit reached. Wait for pending tests to finish and try again later.")
 		case errors.Is(err, notifications.ErrEndpointNotFound):
 			writeError(w, http.StatusNotFound, "Not Found", "Notification endpoint was not found.")
 		case errors.Is(err, notifications.ErrEndpointDisabled):

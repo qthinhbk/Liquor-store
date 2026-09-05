@@ -3,6 +3,7 @@ package server
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,17 +83,46 @@ func (s *Server) requireTrustedOrigin(w http.ResponseWriter, r *http.Request) bo
 }
 
 func (s *Server) clientIP(r *http.Request) string {
-	if s.config.TrustProxy {
-		if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); net.ParseIP(forwarded) != nil {
-			return forwarded
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil || peer.Zone() != "" {
+		return "unknown"
+	}
+	peer = peer.Unmap()
+	trusted := func(ip netip.Addr) bool {
+		for _, prefix := range s.config.TrustedProxyCIDRs {
+			if prefix.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+	if !s.config.TrustProxy || !trusted(peer) {
+		return peer.String()
+	}
+	forwarded := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	if forwarded == "" || len(forwarded) > 4096 {
+		return peer.String()
+	}
+	parts := strings.Split(forwarded, ",")
+	if len(parts) > 32 {
+		return peer.String()
+	}
+	chain := make([]netip.Addr, 0, len(parts))
+	for _, part := range parts {
+		ip, err := netip.ParseAddr(strings.TrimSpace(part))
+		if err != nil || ip.Zone() != "" {
+			return peer.String()
+		}
+		chain = append(chain, ip.Unmap())
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		if !trusted(chain[i]) {
+			return chain[i].String()
 		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil && net.ParseIP(host) != nil {
-		return host
-	}
-	if net.ParseIP(r.RemoteAddr) != nil {
-		return r.RemoteAddr
-	}
-	return "unknown"
+	return peer.String()
 }

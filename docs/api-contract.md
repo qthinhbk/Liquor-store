@@ -1,6 +1,6 @@
 # REST API contract
 
-All application endpoints use the `/api/v1` prefix, JSON bodies and ISO-8601 timestamps. Authenticated endpoints require a bearer access token. Responses use `401` for unauthenticated requests, `403` for insufficient store role and `404` when the requested resource is outside the caller's store scope.
+All application endpoints use the `/api/v1` prefix, JSON bodies and ISO-8601 timestamps. Authenticated endpoints require a bearer access token and an ACTIVE user account. Responses use `401` for unauthenticated or suspended/deleted accounts, `403` for insufficient store role and `404` when the requested resource is outside the caller's store scope.
 
 ## Authentication
 
@@ -17,7 +17,7 @@ All application endpoints use the `/api/v1` prefix, JSON bodies and ISO-8601 tim
 | Method | Path | Minimum role |
 | --- | --- | --- |
 | GET | `/stores` | authenticated |
-| POST | `/stores` | platform bootstrap / owner |
+| POST | `/stores` | existing active owner; initial bootstrap uses explicitly enabled registration |
 | GET, PATCH | `/stores/:storeId` | store member / owner |
 | GET, POST | `/stores/:storeId/members` | manager / owner |
 | PATCH, DELETE | `/stores/:storeId/members/:userId` | owner |

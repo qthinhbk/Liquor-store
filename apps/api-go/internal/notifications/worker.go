@@ -162,7 +162,7 @@ func (w *Worker) claim(ctx context.Context) ([]claimedDelivery, error) {
 	rows, err := w.db.Query(ctx, `WITH candidates AS (
   SELECT "id" FROM "notification_deliveries"
   WHERE "status" IN ('PENDING','RETRY_SCHEDULED') AND "availableAt"<=NOW() AND "attemptCount"<"maxAttempts"
-  ORDER BY "availableAt","createdAt","id" FOR UPDATE SKIP LOCKED LIMIT $1
+  ORDER BY CASE WHEN "deliveryKind"='ALERT' THEN 0 ELSE 1 END,"availableAt","createdAt","id" FOR UPDATE SKIP LOCKED LIMIT $1
 ), claimed AS (
   UPDATE "notification_deliveries" d SET "status"='PROCESSING',"attemptCount"=d."attemptCount"+1,
     "lastAttemptAt"=NOW(),"lockedAt"=NOW(),"lockedUntil"=NOW()+make_interval(secs=>$2::double precision),"updatedAt"=NOW()
@@ -212,6 +212,7 @@ func (w *Worker) process(ctx context.Context, item claimedDelivery) error {
 		}
 	}
 	request := SendRequest{
+		StoreID:    item.StoreID,
 		DeliveryID: item.ID, Provider: Provider(item.Provider), ProviderAccountRef: item.ProviderAccountRef, DestinationRef: item.DestinationRef,
 		CredentialRef: item.CredentialRef, Config: item.Config, TemplateVersion: item.TemplateVersion, Payload: item.Payload,
 	}

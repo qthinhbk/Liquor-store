@@ -33,7 +33,7 @@ func newTelegramTestSender(t *testing.T, handler http.HandlerFunc) telegramTestH
 	})
 	server := httptest.NewServer(wrapped)
 	t.Cleanup(server.Close)
-	resolver := NewEnvCredentialResolver()
+	resolver := newSenderTestResolver()
 	sender := NewTelegramSender(resolver, TelegramSenderOptions{BaseURL: server.URL})
 	return telegramTestHarness{sender: sender, hits: &hits}
 }
@@ -52,6 +52,7 @@ func alertSendRequest(config json.RawMessage) SendRequest {
 		StorageKey:    "evidence/alert-1/clip.mp4",
 	})
 	return SendRequest{
+		StoreID:         "store-1",
 		DeliveryID:      uuidForTest(),
 		Provider:        ProviderTelegram,
 		DestinationRef:  fakeTelegramChat,
@@ -64,6 +65,7 @@ func alertSendRequest(config json.RawMessage) SendRequest {
 
 func testSendRequest() SendRequest {
 	return SendRequest{
+		StoreID:         "store-1",
 		DeliveryID:      uuidForTest(),
 		Provider:        ProviderTelegram,
 		DestinationRef:  fakeTelegramChat,
@@ -113,7 +115,7 @@ func assertNoTokenLeak(t *testing.T, text string) {
 }
 
 func TestTelegramSenderProvider(t *testing.T) {
-	sender := NewTelegramSender(NewEnvCredentialResolver(), TelegramSenderOptions{})
+	sender := NewTelegramSender(newSenderTestResolver(), TelegramSenderOptions{})
 	if sender.Provider() != ProviderTelegram {
 		t.Fatal("provider must be TELEGRAM")
 	}
@@ -338,7 +340,7 @@ func TestTelegramNetworkFailureIsTransient(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN_UNIT_TEST", fakeTelegramToken)
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	server.Close()
-	sender := NewTelegramSender(NewEnvCredentialResolver(), TelegramSenderOptions{BaseURL: server.URL})
+	sender := NewTelegramSender(newSenderTestResolver(), TelegramSenderOptions{BaseURL: server.URL})
 	_, err := sender.Send(context.Background(), testSendRequest())
 	assertTransient(t, err, TelegramCodeNetworkError)
 }
@@ -351,7 +353,7 @@ func TestTelegramContextCancellationIsTransient(t *testing.T) {
 		<-release
 	}))
 	t.Cleanup(func() { close(release); server.Close() })
-	sender := NewTelegramSender(NewEnvCredentialResolver(), TelegramSenderOptions{BaseURL: server.URL})
+	sender := NewTelegramSender(newSenderTestResolver(), TelegramSenderOptions{BaseURL: server.URL})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := sender.Send(ctx, testSendRequest())
@@ -368,7 +370,7 @@ func TestTelegramClientTimeoutIsTransient(t *testing.T) {
 		<-release
 	}))
 	t.Cleanup(func() { close(release); server.Close() })
-	sender := NewTelegramSender(NewEnvCredentialResolver(), TelegramSenderOptions{
+	sender := NewTelegramSender(newSenderTestResolver(), TelegramSenderOptions{
 		BaseURL:    server.URL,
 		HTTPClient: &http.Client{Timeout: 50 * time.Millisecond},
 	})
@@ -501,7 +503,7 @@ func TestTelegramRedirectIsBlockedAndNeverFollowed(t *testing.T) {
 				http.Redirect(writer, request, secondServer.URL+"/steal", status)
 			}))
 			t.Cleanup(firstServer.Close)
-			sender := NewTelegramSender(NewEnvCredentialResolver(), TelegramSenderOptions{BaseURL: firstServer.URL})
+			sender := NewTelegramSender(newSenderTestResolver(), TelegramSenderOptions{BaseURL: firstServer.URL})
 			result, err := sender.Send(context.Background(), testSendRequest())
 			if err == nil {
 				t.Fatal("redirect response must not be reported as success")
@@ -528,7 +530,7 @@ func TestTelegramInjectedZeroTimeoutClientIsStillBounded(t *testing.T) {
 		<-release
 	}))
 	t.Cleanup(func() { close(release); server.Close() })
-	sender := NewTelegramSender(NewEnvCredentialResolver(), TelegramSenderOptions{
+	sender := NewTelegramSender(newSenderTestResolver(), TelegramSenderOptions{
 		BaseURL:        server.URL,
 		HTTPClient:     &http.Client{Timeout: 0},
 		RequestTimeout: 60 * time.Millisecond,

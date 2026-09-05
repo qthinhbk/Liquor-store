@@ -19,10 +19,18 @@ func TestTelegramLiveSmoke(t *testing.T) {
 		t.Skip("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be provided in the process environment; the smoke test did not run and no destination was guessed")
 	}
 	t.Setenv("TELEGRAM_BOT_TOKEN", token)
-	sender := NewTelegramSender(NewEnvCredentialResolver(), TelegramSenderOptions{})
+	bindings, bindingErr := ParseCredentialBindings(os.Getenv("NOTIFICATION_CREDENTIAL_BINDINGS"))
+	if bindingErr != nil {
+		t.Fatal(bindingErr)
+	}
+	storeID := strings.TrimSpace(os.Getenv("NOTIFICATION_TEST_STORE_ID"))
+	if storeID == "" {
+		t.Fatal("NOTIFICATION_TEST_STORE_ID is required for a scoped live smoke test")
+	}
+	sender := NewTelegramSender(NewEnvCredentialResolver(bindings...), TelegramSenderOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	result, err := sender.Send(ctx, SendRequest{
+	result, err := sender.Send(ctx, SendRequest{StoreID: storeID,
 		DeliveryID:      "live-smoke-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 		Provider:        ProviderTelegram,
 		DestinationRef:  chatID,

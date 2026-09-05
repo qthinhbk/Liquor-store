@@ -41,7 +41,7 @@ func TestAIAlertIngestionIsAtomicAndIdempotent(t *testing.T) {
 	var camera cameraResponse
 	doJSON(t, client.http, http.MethodPost, client.base+"/api/v1/stores/"+storeID+"/cameras", client.token, map[string]any{
 		"name": "Whole store", "location": "Sales floor", "protocol": "RTSP",
-		"streamGatewayRef": "ai-ingest/" + uuid.NewString(), "status": "ONLINE", "isEnabled": true,
+		"streamGatewayRef": "ai-ingest/" + uuid.NewString(), "isEnabled": true,
 	}, http.StatusCreated, &camera)
 
 	var endpoint notificationEndpointResponse

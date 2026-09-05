@@ -286,7 +286,7 @@ func TestNotificationRuntimePostgreSQL(t *testing.T) {
 	assertDeliveryStatus(t, ctx, db, alertLease, telegramEndpointID, StatusSent, 2)
 
 	firstConcurrent := enqueueRuntimeTestDelivery(t, ctx, db, storeID, telegramEndpointID, uuid.NewString())
-	secondConcurrent := enqueueRuntimeTestDelivery(t, ctx, db, storeID, telegramEndpointID, uuid.NewString())
+	secondConcurrent := enqueueRuntimeTestDelivery(t, ctx, db, storeID, fallbackTelegramEndpointID, uuid.NewString())
 	probe := &concurrencyProbeSender{started: make(chan struct{}, 2), release: make(chan struct{})}
 	concurrentWorker := NewWorker(db, slog.New(slog.NewTextHandler(io.Discard, nil)), []Sender{probe}, nil, WorkerOptions{
 		BatchSize: 2, LeaseDuration: 15 * time.Second,
@@ -366,7 +366,11 @@ func TestNotificationRuntimePostgreSQL(t *testing.T) {
 	if requestedRange != "bytes=0-3" || requestedPath != "/objects/runtime/"+evidenceTwo+"/clip%2001.mp4" {
 		t.Fatalf("origin request path/range = %q %q", requestedPath, requestedRange)
 	}
-	time.Sleep(2100 * time.Millisecond)
+	// Move the persisted deadline into the database's past instead of sleeping
+	// against the independent host clock (Windows and WSL can drift).
+	if _, err := db.Exec(ctx, `UPDATE "notification_video_links" SET "createdAt"=clock_timestamp()-interval '2 days',"expiresAt"=clock_timestamp()-interval '1 day' WHERE "tokenHash"=$1`, digest[:]); err != nil {
+		t.Fatal(err)
+	}
 	expired := httptest.NewRecorder()
 	reviews.ServeToken(expired, httptest.NewRequest(http.MethodGet, "/", nil), token)
 	if expired.Code != http.StatusNotFound {

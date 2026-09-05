@@ -38,10 +38,18 @@ func TestWhatsAppLiveSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal("could not build live smoke configuration")
 	}
-	sender := NewWhatsAppSender(NewEnvCredentialResolver(), WhatsAppSenderOptions{})
+	bindings, bindingErr := ParseCredentialBindings(os.Getenv("NOTIFICATION_CREDENTIAL_BINDINGS"))
+	if bindingErr != nil {
+		t.Fatal(bindingErr)
+	}
+	storeID := strings.TrimSpace(os.Getenv("NOTIFICATION_TEST_STORE_ID"))
+	if storeID == "" {
+		t.Fatal("NOTIFICATION_TEST_STORE_ID is required for a scoped live smoke test")
+	}
+	sender := NewWhatsAppSender(NewEnvCredentialResolver(bindings...), WhatsAppSenderOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	result, err := sender.Send(ctx, SendRequest{
+	result, err := sender.Send(ctx, SendRequest{StoreID: storeID,
 		DeliveryID:         "live-smoke-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 		Provider:           ProviderWhatsApp,
 		ProviderAccountRef: phoneNumberID,

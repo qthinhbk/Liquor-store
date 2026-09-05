@@ -28,7 +28,17 @@ SWAGGER_ENABLED=false
 TRUST_PROXY=true
 ```
 
-Set `TRUST_PROXY=true` only when the API is reachable exclusively through a trusted reverse proxy such as Render's ingress. Add an upstream rate limit/WAF because the in-memory limiter is per API instance.
+Set `TRUST_PROXY=true` only together with `TRUSTED_PROXY_CIDRS` containing the actual ingress networks. Forwarded headers are ignored unless the TCP peer is trusted; chains are validated and walked from right to left to select the first untrusted address. Empty proxy CIDRs fall back to the TCP peer even when TRUST_PROXY is true. Do not use all-address ranges or assume a header is trustworthy because it exists. Add an upstream rate limit/WAF because the in-memory auth limiter is per API instance.
+
+## September 2026 application fixes
+
+- Protected API routes check that the JWT subject still exists and is ACTIVE. Additional stores require an existing active OWNER; OPERATOR-only users cannot bootstrap themselves into OWNER.
+- Alert decisions are serialized in a transaction. OPERATOR cannot change terminal RESOLVED/DISMISSED decisions; management corrections retain immutable before/after history in `alert_status_history`. UPDATE, DELETE and TRUNCATE of this table are rejected by triggers. Database administration/migration privileges can still change schema and must be isolated from the runtime role.
+- Notification credential references must match a server-managed `NOTIFICATION_CREDENTIAL_BINDINGS` entry for the exact store, provider and provider account. Provider-specific environment names are additionally restricted. The API and sender both enforce the binding; an unconfigured worker refuses startup.
+- TEST delivery admission uses a PostgreSQL advisory transaction lock and per-endpoint/store/user plus global quotas. ALERT jobs are selected before TEST jobs.
+- Go 1.26.8 is the minimum build version.
+
+See [security-fixes-2026-09-05.md](security-fixes-2026-09-05.md) for migration order, binding configuration and test results. These changes are local until deployed.
 
 ## Manual actions before public deployment
 

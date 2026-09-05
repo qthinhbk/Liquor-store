@@ -191,7 +191,7 @@ func (s *WhatsAppSender) Send(ctx context.Context, request SendRequest) (SendRes
 	if strings.TrimSpace(request.CredentialRef) == "" || s.resolver == nil {
 		return SendResult{}, &PermanentSendError{Code: WhatsAppCodeMissingCredential}
 	}
-	token, resolveErr := s.resolver.Resolve(ctx, request.CredentialRef)
+	token, resolveErr := s.resolver.Resolve(ctx, request)
 	if resolveErr != nil {
 		var permanent *PermanentSendError
 		if errors.As(resolveErr, &permanent) {

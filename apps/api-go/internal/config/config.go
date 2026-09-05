@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -10,24 +11,27 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/liquor-store/security-api/internal/notifications"
 )
 
 type Config struct {
-	Environment     string
-	Port            string
-	WebOrigin       string
-	DatabaseURL     string
-	DirectURL       string
-	JWTAccessSecret string
-	JWTAccessTTL    time.Duration
-	JWTIssuer       string
-	JWTAudience     string
-	RefreshTTLDays  int
-	RegisterEnabled bool
-	MembersEnabled  bool
-	SwaggerEnabled  bool
-	TrustProxy      bool
-	AIIngestToken   string
+	Environment                    string
+	Port                           string
+	WebOrigin                      string
+	DatabaseURL                    string
+	DirectURL                      string
+	JWTAccessSecret                string
+	JWTAccessTTL                   time.Duration
+	JWTIssuer                      string
+	JWTAudience                    string
+	RefreshTTLDays                 int
+	RegisterEnabled                bool
+	MembersEnabled                 bool
+	SwaggerEnabled                 bool
+	TrustProxy                     bool
+	TrustedProxyCIDRs              []netip.Prefix
+	AIIngestToken                  string
+	NotificationCredentialBindings []notifications.CredentialBinding
 
 	NotificationWorkerEnabled  bool
 	NotificationPollInterval   time.Duration
@@ -72,22 +76,38 @@ func Load() (Config, error) {
 	}
 
 	environment := valueOr("NODE_ENV", "development")
+	bindings, err := notifications.ParseCredentialBindings(os.Getenv("NOTIFICATION_CREDENTIAL_BINDINGS"))
+	if err != nil {
+		return Config{}, err
+	}
+	var trustedProxies []netip.Prefix
+	if raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXY_CIDRS")); raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			prefix, err := netip.ParsePrefix(strings.TrimSpace(entry))
+			if err != nil || prefix.Bits() == 0 {
+				return Config{}, errors.New("TRUSTED_PROXY_CIDRS must contain explicit trusted proxy CIDRs, not all-address ranges")
+			}
+			trustedProxies = append(trustedProxies, prefix.Masked())
+		}
+	}
 	cfg := Config{
-		Environment:     environment,
-		Port:            valueOr("PORT", "3000"),
-		WebOrigin:       valueOr("WEB_ORIGIN", "http://localhost:5173"),
-		DatabaseURL:     strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		DirectURL:       strings.TrimSpace(os.Getenv("DIRECT_URL")),
-		JWTAccessSecret: valueOr("JWT_ACCESS_SECRET", "development-only-change-me"),
-		JWTAccessTTL:    ttl,
-		JWTIssuer:       valueOr("JWT_ISSUER", "liquor-store-security-api"),
-		JWTAudience:     valueOr("JWT_AUDIENCE", "liquor-store-owner-dashboard"),
-		RefreshTTLDays:  refreshDays,
-		RegisterEnabled: boolValue("REGISTER_ENABLED", false),
-		MembersEnabled:  boolValue("MEMBER_MANAGEMENT_ENABLED", false),
-		SwaggerEnabled:  boolValue("SWAGGER_ENABLED", environment != "production"),
-		TrustProxy:      boolValue("TRUST_PROXY", false),
-		AIIngestToken:   strings.TrimSpace(os.Getenv("AI_INGEST_TOKEN")),
+		TrustedProxyCIDRs:              trustedProxies,
+		NotificationCredentialBindings: bindings,
+		Environment:                    environment,
+		Port:                           valueOr("PORT", "3000"),
+		WebOrigin:                      valueOr("WEB_ORIGIN", "http://localhost:5173"),
+		DatabaseURL:                    strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		DirectURL:                      strings.TrimSpace(os.Getenv("DIRECT_URL")),
+		JWTAccessSecret:                valueOr("JWT_ACCESS_SECRET", "development-only-change-me"),
+		JWTAccessTTL:                   ttl,
+		JWTIssuer:                      valueOr("JWT_ISSUER", "liquor-store-security-api"),
+		JWTAudience:                    valueOr("JWT_AUDIENCE", "liquor-store-owner-dashboard"),
+		RefreshTTLDays:                 refreshDays,
+		RegisterEnabled:                boolValue("REGISTER_ENABLED", false),
+		MembersEnabled:                 boolValue("MEMBER_MANAGEMENT_ENABLED", false),
+		SwaggerEnabled:                 boolValue("SWAGGER_ENABLED", environment != "production"),
+		TrustProxy:                     boolValue("TRUST_PROXY", false),
+		AIIngestToken:                  strings.TrimSpace(os.Getenv("AI_INGEST_TOKEN")),
 
 		NotificationWorkerEnabled:  boolValue("NOTIFICATION_WORKER_ENABLED", false),
 		NotificationPollInterval:   pollInterval,
@@ -122,6 +142,9 @@ func Load() (Config, error) {
 	}
 	if cfg.NotificationWorkerEnabled && (cfg.PublicAPIBaseURL == "" || cfg.EvidenceOriginBaseURL == "") {
 		return Config{}, errors.New("PUBLIC_API_BASE_URL and EVIDENCE_ORIGIN_BASE_URL are required when the notification worker is enabled")
+	}
+	if cfg.NotificationWorkerEnabled && len(cfg.NotificationCredentialBindings) == 0 {
+		return Config{}, errors.New("NOTIFICATION_CREDENTIAL_BINDINGS is required when the notification worker is enabled")
 	}
 	if (cfg.WhatsAppWebhookVerifyToken == "") != (cfg.WhatsAppAppSecret == "") {
 		return Config{}, errors.New("WHATSAPP_WEBHOOK_VERIFY_TOKEN and WHATSAPP_APP_SECRET must be configured together")

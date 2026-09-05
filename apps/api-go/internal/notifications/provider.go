@@ -7,6 +7,7 @@ import (
 )
 
 type SendRequest struct {
+	StoreID            string
 	DeliveryID         string
 	Provider           Provider
 	ProviderAccountRef string

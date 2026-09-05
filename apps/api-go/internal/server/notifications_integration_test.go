@@ -21,6 +21,7 @@ import (
 )
 
 type notifyTestClient struct {
+	api   *Server
 	http  *http.Client
 	base  string
 	pool  *pgxpool.Pool
@@ -70,13 +71,14 @@ func newNotifyTestServer(t *testing.T, membersEnabled bool) *notifyTestClient {
 	}
 	t.Cleanup(pool.Close)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	testServer := httptest.NewServer(New(cfg, pool, logger).Handler())
+	api := New(cfg, pool, logger)
+	testServer := httptest.NewServer(api.Handler())
 	t.Cleanup(testServer.Close)
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &notifyTestClient{http: &http.Client{Jar: jar, Timeout: 30 * time.Second}, base: testServer.URL, pool: pool}
+	return &notifyTestClient{http: &http.Client{Jar: jar, Timeout: 30 * time.Second}, base: testServer.URL, pool: pool, api: api}
 }
 
 func (c *notifyTestClient) registerNotificationUser(t *testing.T, creds notificationTestCredentials) (string, string) {
@@ -89,7 +91,15 @@ func (c *notifyTestClient) registerNotificationUser(t *testing.T, creds notifica
 	if registered.User.ID == "" || len(registered.User.Stores) == 0 || registered.User.Stores[0].StoreID == "" {
 		t.Fatalf("register response is missing user or store identifiers: %s", mustMarshalNotification(t, registered))
 	}
-	return registered.User.ID, registered.User.Stores[0].StoreID
+	storeID := registered.User.Stores[0].StoreID
+	// Assign fixture credentials from trusted server configuration, separately
+	// from the HTTP endpoint payload under test.
+	c.api.config.NotificationCredentialBindings = append(c.api.config.NotificationCredentialBindings,
+		notifications.CredentialBinding{StoreID: storeID, Provider: notifications.ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN"},
+		notifications.CredentialBinding{StoreID: storeID, Provider: notifications.ProviderTelegram, ProviderAccountRef: "@KetchRetailSecurityBot", CredentialRef: "env://TELEGRAM_BOT_TOKEN"},
+		notifications.CredentialBinding{StoreID: storeID, Provider: notifications.ProviderWhatsApp, ProviderAccountRef: "111122223333", CredentialRef: "env://WHATSAPP_ACCESS_TOKEN"},
+	)
+	return registered.User.ID, storeID
 }
 
 func (c *notifyTestClient) login(t *testing.T, email, password string) string {
@@ -254,7 +264,7 @@ func TestNotificationConfigurationFlow(t *testing.T) {
 	var whatsappEndpoint notificationEndpointResponse
 	doJSON(t, client.http, http.MethodPost, base+"/api/v1/stores/"+ownerStoreID+"/notification-endpoints", client.token, map[string]any{
 		"provider": "WHATSAPP", "label": "Owner WhatsApp", "providerAccountRef": "111122223333",
-		"destinationRef": "+15550001234", "credentialRef": "render-secret://whatsapp/cloud-api/access-token", "isEnabled": false,
+		"destinationRef": "+15550001234", "credentialRef": "env://WHATSAPP_ACCESS_TOKEN", "isEnabled": false,
 		"config": whatsAppConfig,
 	}, http.StatusCreated, &whatsappEndpoint)
 	testPathWhatsApp := base + "/api/v1/stores/" + ownerStoreID + "/notification-endpoints/" + whatsappEndpoint.ID + "/test"

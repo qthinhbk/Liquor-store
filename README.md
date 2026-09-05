@@ -32,7 +32,7 @@ pnpm dev
 - API: `http://localhost:3000/api/v1`
 - Swagger UI: `http://localhost:3000/docs`
 
-Go 1.26.5 or newer is recommended. On this workspace, `scripts/go.ps1` automatically uses the portable SDK in `.tools/go-1.26.5` when Go is not installed system-wide.
+Go 1.26.8 or newer is required. `go.mod` enforces the patched minimum; the PowerShell scripts allow automatic toolchain selection and can use a portable SDK in `.tools/go-1.26.8` when Go is not installed system-wide.
 
 ## Design artifacts
 

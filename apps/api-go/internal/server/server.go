@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/liquor-store/security-api/internal/config"
 	"github.com/liquor-store/security-api/internal/notifications"
@@ -124,6 +125,19 @@ func (s *Server) protected(mux *http.ServeMux, pattern string, handler func(http
 		user, err := s.authenticate(r)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "Unauthorized", err.Error())
+			return
+		}
+		var active bool
+		if err := s.db.QueryRow(r.Context(), `SELECT "status"='ACTIVE' FROM "users" WHERE "id"=$1`, user.ID).Scan(&active); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusUnauthorized, "Unauthorized", "Account is unavailable.")
+			} else {
+				s.internalError(w, err)
+			}
+			return
+		}
+		if !active {
+			writeError(w, http.StatusUnauthorized, "Unauthorized", "Account is unavailable.")
 			return
 		}
 		handler(w, r.WithContext(context.WithValue(r.Context(), principalKey, user)), user)

@@ -55,6 +55,8 @@ func (s *Server) listStores(w http.ResponseWriter, r *http.Request, user princip
 }
 
 func (s *Server) createStore(w http.ResponseWriter, r *http.Request, user principal) {
+	// Bootstrap is handled by the explicitly enabled registration route. Creating
+	// additional stores requires an existing active owner, never just a JWT.
 	var input struct {
 		Name    string  `json:"name"`
 		Code    string  `json:"code"`
@@ -75,6 +77,17 @@ func (s *Server) createStore(w http.ResponseWriter, r *http.Request, user princi
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
+	// Hold the authorizing membership and account until commit so concurrent
+	// suspension or membership removal cannot race the creation.
+	var membershipID string
+	if err := tx.QueryRow(r.Context(), `SELECT sm."id" FROM "store_memberships" sm JOIN "users" u ON u."id"=sm."userId" WHERE sm."userId"=$1 AND sm."role"='OWNER' AND u."status"='ACTIVE' ORDER BY sm."id" LIMIT 1 FOR SHARE OF sm,u`, user.ID).Scan(&membershipID); err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusForbidden, "Forbidden", "Only an active store owner can create another store.")
+		} else {
+			s.internalError(w, err)
+		}
+		return
+	}
 	var address any
 	if input.Address != nil {
 		address = strings.TrimSpace(*input.Address)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -215,7 +216,42 @@ func (s *Server) changeAlertStatus(w http.ResponseWriter, r *http.Request, user 
 		AcknowledgedAt time.Time `json:"acknowledgedAt"`
 		ResolutionNote *string   `json:"resolutionNote"`
 	}
-	err := s.db.QueryRow(r.Context(), `UPDATE "alerts" SET "status"=$1,"acknowledgedAt"=NOW(),"acknowledgedById"=$2,"resolutionNote"=$3,"updatedAt"=NOW() WHERE "id"=$4 AND "storeId"=$5 RETURNING "id","status","acknowledgedAt","resolutionNote"`, status, user.ID, note, alertID, storeID).Scan(&response.ID, &response.Status, &response.AcknowledgedAt, &response.ResolutionNote)
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	var role string
+	err = tx.QueryRow(r.Context(), `SELECT sm."role" FROM "store_memberships" sm JOIN "users" u ON u."id"=sm."userId" WHERE sm."userId"=$1 AND sm."storeId"=$2 AND u."status"='ACTIVE' FOR SHARE OF sm,u`, user.ID, storeID).Scan(&role)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusForbidden, "Forbidden", "Your store role does not allow this action.")
+		} else {
+			s.internalError(w, err)
+		}
+		return
+	}
+	var previousStatus string
+	var previousActor, previousNote *string
+	var previousAt *time.Time
+	err = tx.QueryRow(r.Context(), `SELECT "status","acknowledgedById","acknowledgedAt","resolutionNote" FROM "alerts" WHERE "id"=$1 AND "storeId"=$2 FOR UPDATE`, alertID, storeID).Scan(&previousStatus, &previousActor, &previousAt, &previousNote)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "Not Found", "Alert was not found.")
+		} else {
+			s.internalError(w, err)
+		}
+		return
+	}
+	if code := alertTransitionStatus(previousStatus, status, role); code != 0 {
+		writeError(w, code, http.StatusText(code), "This alert decision cannot be changed with your current role or from its current state.")
+		return
+	}
+	if input.Note == nil {
+		note = previousNote
+	}
+	err = tx.QueryRow(r.Context(), `UPDATE "alerts" SET "status"=$1,"acknowledgedAt"=NOW(),"acknowledgedById"=$2,"resolutionNote"=$3,"updatedAt"=NOW() WHERE "id"=$4 AND "storeId"=$5 RETURNING "id","status","acknowledgedAt","resolutionNote"`, status, user.ID, note, alertID, storeID).Scan(&response.ID, &response.Status, &response.AcknowledgedAt, &response.ResolutionNote)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeError(w, http.StatusNotFound, "Not Found", "Alert was not found.")
@@ -224,5 +260,27 @@ func (s *Server) changeAlertStatus(w http.ResponseWriter, r *http.Request, user 
 		s.internalError(w, err)
 		return
 	}
+	if _, err := tx.Exec(r.Context(), `INSERT INTO "alert_status_history" ("id","storeId","alertId","actorId","actorRole","previousStatus","newStatus","previousActorId","previousAcknowledgedAt","previousNote","note") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, uuid.NewString(), storeID, alertID, user.ID, role, previousStatus, status, previousActor, previousAt, previousNote, note); err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.internalError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, response)
+}
+
+// Terminal decisions can only be corrected by management. Repeating a decision
+// never rewrites its actor/note; row locking serializes competing transitions.
+func alertTransitionStatus(from, to, role string) int {
+	if roleRank[role] < roleRank["OPERATOR"] || (to == "RESOLVED" && roleRank[role] < roleRank["MANAGER"]) ||
+		(oneOf(from, "RESOLVED", "DISMISSED") && roleRank[role] < roleRank["MANAGER"]) {
+		return http.StatusForbidden
+	}
+	if from == to || !oneOf(from, "NEW", "ACKNOWLEDGED", "RESOLVED", "DISMISSED") || !oneOf(to, "ACKNOWLEDGED", "RESOLVED", "DISMISSED") ||
+		(oneOf(from, "RESOLVED", "DISMISSED") && to == "ACKNOWLEDGED") {
+		return http.StatusConflict
+	}
+	return 0
 }

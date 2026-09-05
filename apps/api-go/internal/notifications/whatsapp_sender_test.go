@@ -39,7 +39,7 @@ func newWhatsAppTestSender(t *testing.T, handler http.HandlerFunc) whatsAppTestH
 	}))
 	t.Cleanup(server.Close)
 	return whatsAppTestHarness{
-		sender: NewWhatsAppSender(NewEnvCredentialResolver(), WhatsAppSenderOptions{BaseURL: server.URL}),
+		sender: NewWhatsAppSender(newSenderTestResolver(), WhatsAppSenderOptions{BaseURL: server.URL}),
 		hits:   &hits,
 	}
 }
@@ -78,6 +78,7 @@ func whatsAppAlertRequest() SendRequest {
 	})
 	payload.ReviewURL = fakeWhatsAppVideo
 	return SendRequest{
+		StoreID:            "store-1",
 		DeliveryID:         uuidForTest(),
 		Provider:           ProviderWhatsApp,
 		ProviderAccountRef: fakeWhatsAppPhoneID,
@@ -152,7 +153,7 @@ func assertNoWhatsAppLeak(t *testing.T, text string) {
 }
 
 func TestWhatsAppSenderProvider(t *testing.T) {
-	if provider := NewWhatsAppSender(NewEnvCredentialResolver(), WhatsAppSenderOptions{}).Provider(); provider != ProviderWhatsApp {
+	if provider := NewWhatsAppSender(newSenderTestResolver(), WhatsAppSenderOptions{}).Provider(); provider != ProviderWhatsApp {
 		t.Fatalf("unexpected provider %s", provider)
 	}
 }
@@ -294,7 +295,7 @@ func TestWhatsAppSenderRejectsInvalidInputsBeforeHTTP(t *testing.T) {
 func TestWhatsAppSenderCredentialFailures(t *testing.T) {
 	request := whatsAppAlertRequest()
 	request.CredentialRef = "render-secret://whatsapp/token"
-	sender := NewWhatsAppSender(NewEnvCredentialResolver(), WhatsAppSenderOptions{})
+	sender := NewWhatsAppSender(newSenderTestResolver(), WhatsAppSenderOptions{})
 	_, err := sender.Send(context.Background(), request)
 	assertWhatsAppPermanent(t, err, WhatsAppCodeUnsupportedCredRef)
 
@@ -336,7 +337,7 @@ func TestWhatsAppSenderHasFiniteRequestTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("WHATSAPP_ACCESS_TOKEN_UNIT_TEST", fakeWhatsAppToken)
-	sender := NewWhatsAppSender(NewEnvCredentialResolver(), WhatsAppSenderOptions{
+	sender := NewWhatsAppSender(newSenderTestResolver(), WhatsAppSenderOptions{
 		BaseURL: server.URL, HTTPClient: &http.Client{Timeout: 0}, RequestTimeout: 50 * time.Millisecond,
 	})
 	started := time.Now()

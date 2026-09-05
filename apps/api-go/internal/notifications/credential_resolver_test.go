@@ -14,8 +14,8 @@ func isUnsupportedScheme(err error) bool {
 
 func TestEnvResolverResolvesTrimmedValue(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN_UNIT_TEST_SET", "  123456789:TEST_VALUE  ")
-	resolver := NewEnvCredentialResolver()
-	value, err := resolver.Resolve(context.Background(), "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET")
+	resolver := NewEnvCredentialResolver(CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY"})
+	value, err := resolver.Resolve(context.Background(), SendRequest{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -25,8 +25,8 @@ func TestEnvResolverResolvesTrimmedValue(t *testing.T) {
 }
 
 func TestEnvResolverMissingVariableIsPermanentMissingCredential(t *testing.T) {
-	resolver := NewEnvCredentialResolver()
-	_, err := resolver.Resolve(context.Background(), "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765")
+	resolver := NewEnvCredentialResolver(CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY"})
+	_, err := resolver.Resolve(context.Background(), SendRequest{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765"})
 	var permanent *PermanentSendError
 	if !errors.As(err, &permanent) || permanent.Code != CredentialCodeMissing {
 		t.Fatalf("expected missing-credential permanent error, got %v", err)
@@ -36,8 +36,8 @@ func TestEnvResolverMissingVariableIsPermanentMissingCredential(t *testing.T) {
 
 func TestEnvResolverEmptyVariableIsPermanentMissingCredential(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY", "   ")
-	resolver := NewEnvCredentialResolver()
-	_, err := resolver.Resolve(context.Background(), "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY")
+	resolver := NewEnvCredentialResolver(CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY"})
+	_, err := resolver.Resolve(context.Background(), SendRequest{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY"})
 	var permanent *PermanentSendError
 	if !errors.As(err, &permanent) || permanent.Code != CredentialCodeMissing {
 		t.Fatalf("empty variable must map to missing credential, got %v", err)
@@ -45,26 +45,26 @@ func TestEnvResolverEmptyVariableIsPermanentMissingCredential(t *testing.T) {
 }
 
 func TestEnvResolverEmptyRefNameFailsClosed(t *testing.T) {
-	resolver := NewEnvCredentialResolver()
+	resolver := NewEnvCredentialResolver(CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY"})
 	for _, ref := range []string{"env://", "env:// ", "env://HAS-DASH", "env://lower_case"} {
-		if _, err := resolver.Resolve(context.Background(), ref); !isUnsupportedScheme(err) {
+		if _, err := resolver.Resolve(context.Background(), SendRequest{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: ref}); !isUnsupportedScheme(err) {
 			t.Fatalf("ref %q must fail closed as unsupported scheme, got %v", ref, err)
 		}
 	}
 }
 
 func TestEnvResolverRenderSecretSchemeFailsClosed(t *testing.T) {
-	resolver := NewEnvCredentialResolver()
-	_, err := resolver.Resolve(context.Background(), RenderSecretCredentialScheme+"telegram/main-bot")
+	resolver := NewEnvCredentialResolver(CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY"})
+	_, err := resolver.Resolve(context.Background(), SendRequest{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: RenderSecretCredentialScheme + "telegram/main-bot"})
 	if !isUnsupportedScheme(err) {
 		t.Fatalf("render-secret scheme must fail closed until a deployment-specific resolver exists, got %v", err)
 	}
 }
 
 func TestEnvResolverRejectsRawTokenWithoutScheme(t *testing.T) {
-	resolver := NewEnvCredentialResolver()
+	resolver := NewEnvCredentialResolver(CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY"})
 	rawToken := rawTelegramTokenForTest()
-	_, err := resolver.Resolve(context.Background(), rawToken)
+	_, err := resolver.Resolve(context.Background(), SendRequest{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: rawToken})
 	if !isUnsupportedScheme(err) {
 		t.Fatalf("raw token without a scheme must be rejected, got %v", err)
 	}
@@ -74,8 +74,8 @@ func TestEnvResolverRejectsRawTokenWithoutScheme(t *testing.T) {
 }
 
 func TestEnvResolverEmptyCredentialRefIsMissing(t *testing.T) {
-	resolver := NewEnvCredentialResolver()
-	_, err := resolver.Resolve(context.Background(), "   ")
+	resolver := NewEnvCredentialResolver(CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY"})
+	_, err := resolver.Resolve(context.Background(), SendRequest{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "   "})
 	var permanent *PermanentSendError
 	if !errors.As(err, &permanent) || permanent.Code != CredentialCodeMissing {
 		t.Fatalf("empty credentialRef must map to missing credential, got %v", err)
@@ -83,10 +83,10 @@ func TestEnvResolverEmptyCredentialRefIsMissing(t *testing.T) {
 }
 
 func TestEnvResolverHonorsContextCancellation(t *testing.T) {
-	resolver := NewEnvCredentialResolver()
+	resolver := NewEnvCredentialResolver(CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_SET"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_DEFINITELY_UNSET_98765"}, CredentialBinding{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://TELEGRAM_BOT_TOKEN_UNIT_TEST_EMPTY"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := resolver.Resolve(ctx, "env://ANY_NAME"); err == nil {
+	if _, err := resolver.Resolve(ctx, SendRequest{StoreID: "store-1", Provider: ProviderTelegram, CredentialRef: "env://ANY_NAME"}); err == nil {
 		t.Fatal("cancelled context must short-circuit resolution")
 	}
 }

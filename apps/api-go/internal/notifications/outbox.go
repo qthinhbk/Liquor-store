@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrEndpointNotFound = errors.New("notification endpoint was not found")
-	ErrEndpointDisabled = errors.New("notification endpoint is disabled")
+	ErrEndpointNotFound  = errors.New("notification endpoint was not found")
+	ErrEndpointDisabled  = errors.New("notification endpoint is disabled")
+	ErrTestDeliveryLimit = errors.New("notification test limit reached")
 )
 
 type routeSnapshot struct {
@@ -40,9 +41,10 @@ func TestDedupeKey(endpointID, requestID string) string {
 }
 
 type TestDeliveryInput struct {
-	StoreID    string
-	EndpointID string
-	RequestID  string
+	RequestedByID string
+	StoreID       string
+	EndpointID    string
+	RequestID     string
 }
 
 func EnqueueAlertTx(ctx context.Context, tx pgx.Tx, input AlertNotificationInput) ([]DeliverySummary, error) {
@@ -158,6 +160,11 @@ func loadRoutes(ctx context.Context, tx pgx.Tx, ruleID, storeID string) ([]route
 }
 
 func EnqueueTestTx(ctx context.Context, tx pgx.Tx, input TestDeliveryInput) (DeliverySummary, error) {
+	// A transaction-scoped global lock serializes TEST admission, including
+	// requests from multiple API instances. ALERT ingestion never takes this lock.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(587263910250905)`); err != nil {
+		return DeliverySummary{}, err
+	}
 	var provider string
 	var config json.RawMessage
 	var enabled bool
@@ -186,10 +193,31 @@ func EnqueueTestTx(ctx context.Context, tx pgx.Tx, input TestDeliveryInput) (Del
 		TemplateVersion: version,
 	}
 	dedupeKey := TestDedupeKey(input.EndpointID, input.RequestID)
-	err = tx.QueryRow(ctx, `INSERT INTO "notification_deliveries" ("id","deliveryKind","storeId","alertId","ruleId","endpointId","ruleChannelId","dedupeKey","status","provider","priority","fallbackDelaySeconds","templateVersion","payload","maxAttempts","availableAt","updatedAt") VALUES ($1,$2,$3,NULL,NULL,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),NOW()) ON CONFLICT ("dedupeKey") DO NOTHING RETURNING "id","status"::text`,
-		summary.ID, DeliveryKindTest, input.StoreID, input.EndpointID, dedupeKey, StatusPending, provider, 1, 0, version, string(payloadBytes), MaxAttemptsDefault).Scan(&summary.ID, &summary.Status)
-	if err == pgx.ErrNoRows {
-		err = tx.QueryRow(ctx, `SELECT "id","status"::text FROM "notification_deliveries" WHERE "dedupeKey"=$1`, dedupeKey).Scan(&summary.ID, &summary.Status)
+	err = tx.QueryRow(ctx, `SELECT "id","status"::text FROM "notification_deliveries" WHERE "dedupeKey"=$1 AND "storeId"=$2`, dedupeKey, input.StoreID).Scan(&summary.ID, &summary.Status)
+	if err == nil {
+		return summary, nil
 	}
+	if err != pgx.ErrNoRows {
+		return DeliverySummary{}, err
+	}
+	var limited bool
+	err = tx.QueryRow(ctx, `SELECT
+ count(*) FILTER (WHERE "endpointId"=$1 AND "createdAt">statement_timestamp()-interval '1 minute')>=1 OR
+ count(*) FILTER (WHERE "endpointId"=$1 AND "createdAt">statement_timestamp()-interval '1 hour')>=3 OR
+ count(*) FILTER (WHERE "storeId"=$2 AND "createdAt">statement_timestamp()-interval '1 hour')>=10 OR
+ count(*) FILTER (WHERE "requestedById"=$3 AND "createdAt">statement_timestamp()-interval '1 hour')>=10 OR
+ count(*) FILTER (WHERE "createdAt">statement_timestamp()-interval '1 hour')>=100 OR
+ count(*) FILTER (WHERE "endpointId"=$1 AND "status" IN ('PENDING','PROCESSING','RETRY_SCHEDULED'))>=1 OR
+ count(*) FILTER (WHERE "storeId"=$2 AND "status" IN ('PENDING','PROCESSING','RETRY_SCHEDULED'))>=3 OR
+ count(*) FILTER (WHERE "status" IN ('PENDING','PROCESSING','RETRY_SCHEDULED'))>=50
+ FROM "notification_deliveries" WHERE "deliveryKind"='TEST' AND ("createdAt">statement_timestamp()-interval '1 hour' OR "status" IN ('PENDING','PROCESSING','RETRY_SCHEDULED'))`, input.EndpointID, input.StoreID, nullableString(input.RequestedByID)).Scan(&limited)
+	if err != nil {
+		return DeliverySummary{}, err
+	}
+	if limited {
+		return DeliverySummary{}, ErrTestDeliveryLimit
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO "notification_deliveries" ("id","deliveryKind","storeId","alertId","ruleId","endpointId","ruleChannelId","dedupeKey","status","provider","priority","fallbackDelaySeconds","templateVersion","payload","maxAttempts","availableAt","updatedAt","requestedById","createdAt") VALUES ($1,$2,$3,NULL,NULL,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,statement_timestamp(),statement_timestamp(),$13,statement_timestamp()) RETURNING "id","status"::text`,
+		summary.ID, DeliveryKindTest, input.StoreID, input.EndpointID, dedupeKey, StatusPending, provider, 1, 0, version, string(payloadBytes), MaxAttemptsDefault, nullableString(input.RequestedByID)).Scan(&summary.ID, &summary.Status)
 	return summary, err
 }

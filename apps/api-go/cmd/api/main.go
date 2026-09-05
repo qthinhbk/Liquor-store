@@ -59,7 +59,14 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second,
 	}
 	if cfg.NotificationWorkerEnabled {
-		resolver := notifications.NewEnvCredentialResolver()
+		bindingContext, cancelBindings := context.WithTimeout(runtimeContext, 10*time.Second)
+		err = notifications.CheckCredentialBindings(bindingContext, db, cfg.NotificationCredentialBindings)
+		cancelBindings()
+		if err != nil {
+			logger.Error("notification credential configuration is incomplete", "error", err)
+			os.Exit(1)
+		}
+		resolver := notifications.NewEnvCredentialResolver(cfg.NotificationCredentialBindings...)
 		telegram := notifications.NewTelegramSender(resolver, notifications.TelegramSenderOptions{})
 		whatsApp := notifications.NewWhatsAppSender(resolver, notifications.WhatsAppSenderOptions{})
 		worker := notifications.NewWorker(db, logger, []notifications.Sender{telegram, whatsApp}, reviewService, notifications.WorkerOptions{
